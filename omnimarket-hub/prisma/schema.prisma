@@ -1,0 +1,225 @@
+// ============================================================================
+// OmniMarket Operations Hub — schema.prisma (Prisma ORM 7 + PostgreSQL)
+// ----------------------------------------------------------------------------
+// Prisma 7: la URL de conexión NO va aquí; vive en prisma.config.ts (CLI) y en
+// el driver adapter @prisma/adapter-pg (runtime). Ver src/server/db.ts.
+//
+// Convenciones:
+//   - Dinero SIEMPRE en centavos (Int). Nunca Float/Decimal en cálculos de UI.
+//   - Tablas y columnas en snake_case vía @@map/@map; modelos en PascalCase.
+//   - Índices declarados aquí con @@index. Lo que Prisma no puede expresar
+//     (COLLATE "C", CHECK constraints) va en la migración SQL custom:
+//     prisma/migrations/20261024000100_constraints_and_collation/migration.sql
+// ============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// 1. AUTENTICACIÓN OAuth 2.0 (Better Auth: Google + GitHub)
+// ----------------------------------------------------------------------------
+// Estructura compatible con el adapter de Prisma de Better Auth. Tras instalar
+// Better Auth, ejecuta su CLI `generate` y compara: si tu versión añade campos
+// (p. ej. por plugins), el CLI manda.
+// ============================================================================
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions      Session[]
+  accounts      Account[]
+  ordersCreated Order[]            @relation("OrderCreatedBy")
+  statusEvents  OrderStatusEvent[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  token     String   @unique // lookup O(1) en cada request autenticado
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId]) // Postgres NO indexa FKs automáticamente
+  @@map("session")
+}
+
+// Una fila por proveedor vinculado: providerId = "google" | "github".
+model Account {
+  id                    String    @id
+  accountId             String // id del usuario en el proveedor OAuth
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String? // no se usa (OAuth exclusivo), lo exige el adapter
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId]) // callback OAuth: "¿ya existe esta cuenta?"
+  @@index([userId])
+  @@map("account")
+}
+
+// Tokens de estado/PKCE del flujo OAuth.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ============================================================================
+// 2. CATÁLOGO Y PEDIDOS (Kanban)
+// ============================================================================
+
+// Cada estado es una columna del tablero Kanban.
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+model Product {
+  id         String   @id @default(uuid()) @db.Uuid
+  sku        String   @unique @db.VarChar(32)
+  name       String   @db.VarChar(160)
+  priceCents Int      @map("price_cents")
+  costCents  Int      @map("cost_cents")
+  stock      Int      @default(0)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  items OrderItem[]
+
+  @@map("products")
+}
+
+model Order {
+  id            String      @id @default(uuid()) @db.Uuid
+  orderNumber   String      @unique @map("order_number") @db.VarChar(24)
+  customerName  String      @map("customer_name") @db.VarChar(120)
+  customerEmail String      @map("customer_email") @db.VarChar(254)
+  status        OrderStatus @default(PENDING)
+
+  // Orden dentro de la columna Kanban como índice fraccional (string).
+  // Mover una tarjeta = UPDATE de 1 sola fila. La migración custom le pone
+  // COLLATE "C" para que Postgres ordene byte a byte, como espera la librería.
+  position String @db.VarChar(64)
+
+  // Concurrencia optimista: UPDATE ... WHERE id = $1 AND version = $2.
+  // 0 filas afectadas => otro usuario movió la tarjeta => rollback en la UI.
+  version Int @default(1)
+
+  // Totales desnormalizados (snapshot al crear el pedido) para no hacer JOIN
+  // con order_items en cada lectura del tablero o de métricas.
+  totalCents Int @map("total_cents")
+  costCents  Int @map("cost_cents")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdById String? @map("created_by_id")
+  createdBy   User?   @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  items  OrderItem[]
+  events OrderStatusEvent[]
+
+  // Lectura del tablero: WHERE status = ? ORDER BY position.
+  // También sirve el GROUP BY status del resumen (index-only scan).
+  @@index([status, position], map: "orders_status_position_idx")
+  // Listado/tabla de pedidos más recientes y recálculo de métricas por día.
+  @@index([createdAt(sort: Desc)], map: "orders_created_at_desc_idx")
+  @@index([createdById])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String @id @default(uuid()) @db.Uuid
+  quantity       Int
+  // Snapshot de precio/costo al momento de la venta: los márgenes históricos
+  // no cambian si después se edita el producto.
+  unitPriceCents Int    @map("unit_price_cents")
+  unitCostCents  Int    @map("unit_cost_cents")
+
+  orderId   String  @map("order_id") @db.Uuid
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String  @map("product_id") @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, productId]) // también cubre las búsquedas por order_id
+  @@index([productId])
+  @@map("order_items")
+}
+
+// Bitácora de cada movimiento Drag & Drop / Bulk Update.
+// Alimenta GET /api/test/kanban-status (último evento de un pedido).
+model OrderStatusEvent {
+  id         BigInt       @id @default(autoincrement())
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  orderId String  @map("order_id") @db.Uuid
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actorId String? @map("actor_id")
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt(sort: Desc)], map: "order_status_events_order_recent_idx")
+  @@index([actorId])
+  @@map("order_status_events")
+}
+
+// ============================================================================
+// 3. MÉTRICAS ANALÍTICAS (pre-agregadas)
+// ----------------------------------------------------------------------------
+// Una fila por día de negocio (zona America/Mexico_City). Se actualiza en la
+// MISMA transacción que crea/cancela un pedido, así GET /api/test/analytics
+// pagina filas ya calculadas en vez de hacer SUM() sobre todos los pedidos.
+// Excluye pedidos CANCELLED.
+// ============================================================================
+
+model DailySalesMetric {
+  day          DateTime @id @db.Date // PK B-tree => ORDER BY day DESC LIMIT n
+  ordersCount  Int      @default(0) @map("orders_count")
+  revenueCents Int      @default(0) @map("revenue_cents")
+  costCents    Int      @default(0) @map("cost_cents")
+  itemsSold    Int      @default(0) @map("items_sold")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("daily_sales_metrics")
+}
