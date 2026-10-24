@@ -59,12 +59,29 @@ export function errorResponse(
   return jsonResponse(timer, { ok: false, error: { code, message, details } }, status);
 }
 
+type DriverCause = { kind?: unknown; originalCode?: unknown };
+type DbError = Error & { code?: unknown; meta?: { driverAdapterError?: { cause?: DriverCause } }; cause?: DriverCause };
+
+/**
+ * Identificadores del error para diagnosticar desde fuera (p. ej. con
+ * `npm run smoke`): tipo, código de Prisma, clase de fallo del driver y
+ * código SQLSTATE de Postgres. Nunca el mensaje: puede incluir host o usuario.
+ */
+function errorDiagnostics(error: unknown) {
+  if (!(error instanceof Error)) return undefined;
+  const e = error as DbError;
+  const cause = e.meta?.driverAdapterError?.cause ?? e.cause;
+  const id = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : undefined);
+  return { type: e.name, code: id(e.code), kind: id(cause?.kind), sqlState: id(cause?.originalCode) };
+}
+
 export function unexpectedErrorResponse(timer: Timer, error: unknown) {
   console.error("[api/test]", error);
-  // En producción no se filtran detalles internos (SQL, host de la BD, etc.).
+  // En producción no se filtra el mensaje (SQL, host de la BD, etc.), solo
+  // los identificadores de errorDiagnostics.
   const message =
     process.env.NODE_ENV === "production" || !(error instanceof Error)
       ? "Error interno del servidor"
       : error.message;
-  return errorResponse(timer, 500, "INTERNAL_ERROR", message);
+  return errorResponse(timer, 500, "INTERNAL_ERROR", message, errorDiagnostics(error));
 }

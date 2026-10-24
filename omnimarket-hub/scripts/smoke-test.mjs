@@ -27,6 +27,23 @@ async function get(path, init = {}) {
   return { response, ms: performance.now() - started };
 }
 
+// Traduce los identificadores de error de la BD (ver errorDiagnostics en
+// src/server/http.ts) a la variable de Vercel que hay que revisar.
+function databaseHint(details) {
+  if (!details) return undefined;
+  const id = [details.kind, details.code, details.sqlState].filter(Boolean).join(" / ");
+  const is = (...values) => values.some((v) => [details.kind, details.code, details.sqlState].includes(v));
+  let hint = "revisa DATABASE_URL en Vercel (Production)";
+  if (is("AuthenticationFailed", "28P01", "P1000")) hint = "usuario o contraseña de DATABASE_URL incorrectos";
+  else if (is("XX000")) hint = "el usuario debe ser el del pooler de Supabase: postgres.<ref-del-proyecto>";
+  else if (is("TlsConnectionError", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE"))
+    hint = "falla el certificado SSL: DATABASE_URL debe terminar en ?sslmode=require&pgbouncer=true&uselibpqcompat=true";
+  else if (is("DatabaseNotReachable", "ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "P1001"))
+    hint = "no se alcanza el servidor: revisa host y puerto (6543) de DATABASE_URL";
+  else if (is("53300", "TooManyConnections")) hint = "demasiadas conexiones: usa el pooler en modo transacción (puerto 6543)";
+  return `Error de base de datos [${id}] → ${hint}`;
+}
+
 async function json(response) {
   try {
     return await response.json();
@@ -100,7 +117,9 @@ async function main() {
   check(
     analytics.status === 200,
     `GET /api/test/analytics responde 200 (HTTP ${analytics.status})`,
-    analytics.status === 404 ? "Falta ENABLE_TEST_ENDPOINTS=true en Vercel (y volver a desplegar)" : JSON.stringify(analytics.body)?.slice(0, 200),
+    analytics.status === 404
+      ? "Falta ENABLE_TEST_ENDPOINTS=true en Vercel (y volver a desplegar)"
+      : (databaseHint(analytics.body?.error?.details) ?? JSON.stringify(analytics.body)?.slice(0, 200)),
   );
   if (analytics.status === 200) {
     const server = samples.map((s) => s.body?.meta?.durationMs ?? Infinity).sort((a, b) => a - b);
