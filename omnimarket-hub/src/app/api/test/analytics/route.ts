@@ -10,8 +10,8 @@ import { guardTestEndpoint } from "@/server/test-guard";
 // SLA < 300 ms: lee la tabla pre-agregada daily_sales_metrics (ver DAL). En
 // producción la latencia la domina la red función↔BD: la región de las
 // funciones debe coincidir con la de la BD. En Next 16 `preferredRegion` está
-// deprecado; se fija en vercel.json, p. ej. { "regions": ["iad1"] } junto a
-// una BD en us-east-1.
+// deprecado; la región se fija en vercel.json ("regions": ["iad1"]), así que
+// la BD debe vivir en us-east-1.
 export async function GET(request: NextRequest) {
   const timer = createTimer();
 

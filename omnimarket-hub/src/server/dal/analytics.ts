@@ -3,14 +3,12 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { OrderStatus } from "@/generated/prisma/enums";
 import type { AnalyticsQuery } from "@/features/analytics/schemas";
+import { BUSINESS_TIMEZONE } from "@/lib/dates";
 import { averageTicketCents, grossMarginCents, grossMarginRatio } from "@/lib/finance";
 import { db } from "@/server/db";
 
 /** Tag de caché del resumen de KPIs. Toda mutación de pedidos lo revalida. */
 export const ANALYTICS_CACHE_TAG = "analytics";
-
-/** Zona horaria del día de negocio en daily_sales_metrics. */
-export const BUSINESS_TIMEZONE = "America/Mexico_City";
 
 type Totals = { ordersCount: number; revenueCents: number; costCents: number; itemsSold: number };
 
@@ -87,6 +85,68 @@ export async function getSalesAnalytics({ page, limit }: AnalyticsQuery) {
 }
 
 export type SalesAnalytics = Awaited<ReturnType<typeof getSalesAnalytics>>;
+
+/**
+ * Suma (+1) o resta (−1) un pedido en la fila de su día de negocio. Debe
+ * llamarse con el `tx` de la misma transacción que crea el pedido o cambia
+ * su estado desde/hacia CANCELLED, así métricas y pedidos nunca divergen.
+ * Lee totales y partidas de la BD, por lo que el pedido y sus order_items
+ * ya deben existir dentro de `tx`.
+ *
+ * - +1 usa upsert: el primer pedido del día crea la fila.
+ * - −1 usa UPDATE: en un INSERT … ON CONFLICT, Postgres evalúa los CHECK
+ *   (>= 0) sobre la fila propuesta *antes* de detectar el conflicto, así que
+ *   un upsert con valores negativos fallaría aunque la fila exista.
+ * Ambos son atómicos a nivel de fila: dos pedidos simultáneos del mismo día
+ * se serializan en el lock de esa fila, sin perder incrementos.
+ */
+export async function applyOrderToDailyMetrics(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  direction: 1 | -1,
+): Promise<void> {
+  if (direction === 1) {
+    await tx.$executeRaw`
+      INSERT INTO "daily_sales_metrics" AS m
+        ("day", "orders_count", "revenue_cents", "cost_cents", "items_sold", "updated_at")
+      SELECT
+        (o."created_at" AT TIME ZONE ${BUSINESS_TIMEZONE}::text)::date,
+        1,
+        o."total_cents",
+        o."cost_cents",
+        COALESCE((SELECT SUM(i."quantity") FROM "order_items" i WHERE i."order_id" = o."id"), 0)::int,
+        now()
+      FROM "orders" o
+      WHERE o."id" = ${orderId}::uuid
+      ON CONFLICT ("day") DO UPDATE SET
+        "orders_count"  = m."orders_count"  + EXCLUDED."orders_count",
+        "revenue_cents" = m."revenue_cents" + EXCLUDED."revenue_cents",
+        "cost_cents"    = m."cost_cents"    + EXCLUDED."cost_cents",
+        "items_sold"    = m."items_sold"    + EXCLUDED."items_sold",
+        "updated_at"    = EXCLUDED."updated_at"
+    `;
+    return;
+  }
+
+  const updated = await tx.$executeRaw`
+    UPDATE "daily_sales_metrics" AS m SET
+      "orders_count"  = m."orders_count"  - 1,
+      "revenue_cents" = m."revenue_cents" - o."total_cents",
+      "cost_cents"    = m."cost_cents"    - o."cost_cents",
+      "items_sold"    = m."items_sold"
+                        - COALESCE((SELECT SUM(i."quantity") FROM "order_items" i WHERE i."order_id" = o."id"), 0)::int,
+      "updated_at"    = now()
+    FROM "orders" o
+    WHERE o."id" = ${orderId}::uuid
+      AND m."day" = (o."created_at" AT TIME ZONE ${BUSINESS_TIMEZONE}::text)::date
+  `;
+
+  // Si no hay fila que restar, la tabla ya estaba desincronizada. Se deja
+  // pasar la mutación del usuario y se avisa: rebuildDailySalesMetrics la repara.
+  if (updated === 0) {
+    console.warn(`[metrics] sin fila de daily_sales_metrics para restar el pedido ${orderId}`);
+  }
+}
 
 /**
  * Reconstruye daily_sales_metrics completo desde orders/order_items con un
