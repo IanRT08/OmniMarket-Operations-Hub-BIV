@@ -156,7 +156,10 @@ jobs:
   deploy:
     name: Desplegar a producción (Vercel)
     needs: e2e
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # push a main, o "Run workflow" manual sobre main (p. ej. tras cambiar
+    # variables en Vercel: un deploy prebuilt no se puede redesplegar desde
+    # su panel, hay que crear uno nuevo). Siempre después de pasar las pruebas.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # La URL del despliegue aparece como "View deployment" en GitHub.
