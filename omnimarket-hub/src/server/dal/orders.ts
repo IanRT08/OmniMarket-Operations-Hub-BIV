@@ -4,10 +4,11 @@ import { randomInt } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { OrderStatus } from "@/generated/prisma/enums";
 import type { MoveOrderData } from "@/features/kanban/schemas";
-import type { CreateOrderData } from "@/features/orders/schemas";
+import type { BulkUpdateData, CreateOrderData } from "@/features/orders/schemas";
 import { toBusinessDay } from "@/lib/dates";
-import { positionAfter } from "@/lib/position";
-import { applyOrderToDailyMetrics } from "@/server/dal/analytics";
+import { positionAfter, positionsAfter } from "@/lib/position";
+import { applyOrdersToDailyMetrics } from "@/server/dal/analytics";
+import { releaseStockForOrders, reserveStockForOrders } from "@/server/dal/products";
 import { db } from "@/server/db";
 import { DomainError } from "@/server/errors";
 
@@ -57,8 +58,12 @@ export type OrderKanbanStatus = NonNullable<Awaited<ReturnType<typeof getOrderKa
 
 // ============================================================================
 // Mutaciones. Las usan las Server Actions de orders/ y kanban/. Cada una es
-// una transacción que incluye el evento de order_status_events y el ajuste
-// de daily_sales_metrics: o se aplica todo, o nada.
+// una transacción que incluye el evento de order_status_events y los ajustes
+// de stock y de daily_sales_metrics: o se aplica todo, o nada.
+//
+// Orden de locks, igual en todas las mutaciones: orders → products →
+// daily_sales_metrics. Con un orden único, dos transacciones concurrentes
+// pueden esperarse pero no bloquearse mutuamente.
 // ============================================================================
 
 const orderSummarySelect = {
@@ -91,22 +96,43 @@ function generateOrderNumber(now: Date): string {
 }
 
 /**
- * Llave fraccional para el final de una columna. Lee la última posición con
- * el índice (status, position). Dos inserciones simultáneas pueden obtener
- * la misma llave; positionBetween() tolera ese empate al mover tarjetas.
+ * Última llave fraccional de una columna, con el índice (status, position).
+ * Dos inserciones simultáneas pueden calcular la misma llave siguiente;
+ * positionBetween() tolera ese empate al mover tarjetas.
  */
-async function positionAtEndOfColumn(tx: Prisma.TransactionClient, status: OrderStatus) {
+async function lastPositionInColumn(tx: Prisma.TransactionClient, status: OrderStatus) {
   const last = await tx.order.findFirst({
     where: { status },
     orderBy: { position: "desc" },
     select: { position: true },
   });
-  return positionAfter(last?.position ?? null);
+  return last?.position ?? null;
+}
+
+async function positionAtEndOfColumn(tx: Prisma.TransactionClient, status: OrderStatus) {
+  return positionAfter(await lastPositionInColumn(tx, status));
+}
+
+/**
+ * Los pedidos pasan a contar como venta (al crearse o al salir de
+ * CANCELLED): descuenta su stock y los suma a las métricas del día.
+ * Puede lanzar INSUFFICIENT_STOCK, que revierte toda la transacción.
+ */
+async function activateOrders(tx: Prisma.TransactionClient, orderIds: string[]) {
+  await reserveStockForOrders(tx, orderIds);
+  await applyOrdersToDailyMetrics(tx, orderIds, 1);
+}
+
+/** Los pedidos dejan de contar como venta (entran a CANCELLED): repone stock y resta métricas. */
+async function deactivateOrders(tx: Prisma.TransactionClient, orderIds: string[]) {
+  await releaseStockForOrders(tx, orderIds);
+  await applyOrdersToDailyMetrics(tx, orderIds, -1);
 }
 
 /**
  * Crea un pedido PENDING al final de su columna. Precios y costos se copian
  * del catálogo en este momento (snapshot), junto con los totales del pedido.
+ * Descuenta el stock; si algún producto no alcanza, no se crea nada.
  */
 export async function createOrder(input: CreateOrderData, actorId: string): Promise<OrderSummary> {
   return db.$transaction(async (tx) => {
@@ -147,7 +173,7 @@ export async function createOrder(input: CreateOrderData, actorId: string): Prom
       select: orderSummarySelect,
     });
 
-    await applyOrderToDailyMetrics(tx, order.id, 1);
+    await activateOrders(tx, [order.id]);
     return order;
   }, TX_OPTIONS);
 }
@@ -164,7 +190,7 @@ type Transition = {
 
 /**
  * Núcleo de moveOrder/cancelOrder: concurrencia optimista + bitácora +
- * métricas, todo dentro de `tx`.
+ * stock + métricas, todo dentro de `tx`.
  *
  * UPDATE … WHERE id = $1 AND version = $2: si afecta 0 filas, otro usuario
  * movió el pedido después de que el cliente lo leyó → VERSION_CONFLICT y el
@@ -207,16 +233,16 @@ async function transitionOrder(tx: Prisma.TransactionClient, transition: Transit
     data: { orderId, fromStatus: current.status, toStatus, actorId },
   });
 
-  // Las métricas excluyen pedidos CANCELLED: solo cambian al entrar o salir de ese estado.
+  // Stock y métricas solo cambian al entrar o salir de CANCELLED.
   if (current.status !== toStatus) {
-    if (toStatus === OrderStatus.CANCELLED) await applyOrderToDailyMetrics(tx, orderId, -1);
-    else if (current.status === OrderStatus.CANCELLED) await applyOrderToDailyMetrics(tx, orderId, 1);
+    if (toStatus === OrderStatus.CANCELLED) await deactivateOrders(tx, [orderId]);
+    else if (current.status === OrderStatus.CANCELLED) await activateOrders(tx, [orderId]);
   }
 
   return order;
 }
 
-/** Cancela un pedido y lo coloca al final de la columna CANCELLED. */
+/** Cancela un pedido, repone su stock y lo coloca al final de la columna CANCELLED. */
 export async function cancelOrder(
   { orderId, version }: { orderId: string; version: number },
   actorId: string,
@@ -248,4 +274,84 @@ export async function moveOrder(input: MoveOrderData, actorId: string): Promise<
       }),
     TX_OPTIONS,
   );
+}
+
+export type BulkUpdateResult = {
+  /** Pedidos que cambiaron de estado, en su nuevo orden dentro de la columna. */
+  updated: OrderSummary[];
+  skipped: { alreadyInStatus: string[]; notFound: string[] };
+};
+
+/**
+ * Bulk Update desde la tabla de pedidos (hasta 100). Mueve cada pedido al
+ * final de la columna destino, respetando el orden en que se seleccionaron.
+ * Es set-based: el número de consultas no crece con la cantidad de pedidos.
+ *
+ * - Los pedidos se bloquean con FOR UPDATE en orden de id. No se valida
+ *   `version` (gana la última escritura), pero se incrementa: un Kanban
+ *   abierto con la versión anterior recibirá VERSION_CONFLICT al arrastrar.
+ * - Los que ya están en el estado destino o no existen se omiten y se
+ *   reportan en `skipped`.
+ * - Stock y métricas se ajustan para los que entran o salen de CANCELLED.
+ *   Si al reactivar no alcanza el stock, se revierte todo el lote.
+ */
+export async function bulkUpdateStatus(
+  { orderIds, status }: BulkUpdateData,
+  actorId: string,
+): Promise<BulkUpdateResult> {
+  const ids = [...new Set(orderIds)];
+
+  return db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string; status: OrderStatus }[]>`
+      SELECT "id", "status"
+      FROM "orders"
+      WHERE "id" = ANY(${ids}::uuid[])
+      ORDER BY "id"
+      FOR UPDATE
+    `;
+    const previousStatus = new Map(locked.map((row) => [row.id, row.status]));
+
+    const notFound = ids.filter((id) => !previousStatus.has(id));
+    const alreadyInStatus = ids.filter((id) => previousStatus.get(id) === status);
+    const toMove = ids.filter((id) => previousStatus.has(id) && previousStatus.get(id) !== status);
+
+    if (toMove.length === 0) return { updated: [], skipped: { alreadyInStatus, notFound } };
+
+    const positions = positionsAfter(await lastPositionInColumn(tx, status), toMove.length);
+    await tx.$executeRaw`
+      UPDATE "orders" AS o SET
+        "status" = ${status}::"order_status",
+        "position" = v."position",
+        "version" = o."version" + 1,
+        "updated_at" = now()
+      FROM unnest(${toMove}::uuid[], ${positions}::text[]) AS v("id", "position")
+      WHERE o."id" = v."id"
+    `;
+
+    await tx.orderStatusEvent.createMany({
+      data: toMove.map((orderId) => ({
+        orderId,
+        fromStatus: previousStatus.get(orderId)!,
+        toStatus: status,
+        actorId,
+      })),
+    });
+
+    if (status === OrderStatus.CANCELLED) {
+      await deactivateOrders(tx, toMove);
+    } else {
+      await activateOrders(
+        tx,
+        toMove.filter((id) => previousStatus.get(id) === OrderStatus.CANCELLED),
+      );
+    }
+
+    const updated = await tx.order.findMany({
+      where: { id: { in: toMove } },
+      orderBy: { position: "asc" },
+      select: orderSummarySelect,
+    });
+
+    return { updated, skipped: { alreadyInStatus, notFound } };
+  }, TX_OPTIONS);
 }

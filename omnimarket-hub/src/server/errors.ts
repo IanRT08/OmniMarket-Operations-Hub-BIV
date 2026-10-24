@@ -4,7 +4,8 @@ export type DomainErrorCode =
   | "ORDER_NOT_FOUND"
   | "VERSION_CONFLICT"
   | "ALREADY_IN_STATUS"
-  | "PRODUCT_UNAVAILABLE";
+  | "PRODUCT_UNAVAILABLE"
+  | "INSUFFICIENT_STOCK";
 
 /**
  * Error de negocio esperado (no un bug). El DAL lo lanza dentro de la

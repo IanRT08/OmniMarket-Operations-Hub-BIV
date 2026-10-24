@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidPosition, positionAfter, positionBetween } from "@/lib/position";
+import { isValidPosition, positionAfter, positionBetween, positionsAfter } from "@/lib/position";
 
 describe("índice fraccional del Kanban", () => {
   it("genera llaves ordenadas entre vecinas y en los extremos", () => {
@@ -19,6 +19,14 @@ describe("índice fraccional del Kanban", () => {
       expect(before < key && key < after).toBe(true);
       before = key;
     }
+  });
+
+  it("genera N llaves consecutivas al final de una columna (Bulk Update)", () => {
+    const last = positionAfter(null);
+    const keys = positionsAfter(last, 5);
+    expect(keys).toHaveLength(5);
+    expect(keys[0] > last).toBe(true);
+    expect([...keys].sort()).toEqual(keys);
   });
 
   it("tolera vecinas empatadas o invertidas sin lanzar", () => {

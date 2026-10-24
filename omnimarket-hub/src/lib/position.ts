@@ -1,4 +1,4 @@
-import { generateKeyBetween } from "fractional-indexing";
+import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
 
 // Índice fraccional del Kanban. Las llaves se comparan byte a byte (`<` de
 // JS = COLLATE "C" en Postgres), así que mover una tarjeta solo actualiza su
@@ -24,6 +24,11 @@ export function positionBetween(before: string | null, after: string | null): st
 /** Llave para colocar una tarjeta al final de una columna cuyo último elemento es `last`. */
 export function positionAfter(last: string | null): string {
   return generateKeyBetween(last, null);
+}
+
+/** `count` llaves consecutivas y ordenadas para añadir varias tarjetas al final de una columna. */
+export function positionsAfter(last: string | null, count: number): string[] {
+  return generateNKeysBetween(last, null, count);
 }
 
 /** true si `key` es una llave fraccional válida (lo que espera la columna orders.position). */

@@ -39,3 +39,4 @@ export type CreateOrderInput = z.input<typeof createOrderSchema>;
 export type CreateOrderData = z.output<typeof createOrderSchema>;
 export type CancelOrderInput = z.input<typeof cancelOrderSchema>;
 export type BulkUpdateInput = z.input<typeof bulkUpdateSchema>;
+export type BulkUpdateData = z.output<typeof bulkUpdateSchema>;

@@ -87,37 +87,47 @@ export async function getSalesAnalytics({ page, limit }: AnalyticsQuery) {
 export type SalesAnalytics = Awaited<ReturnType<typeof getSalesAnalytics>>;
 
 /**
- * Suma (+1) o resta (−1) un pedido en la fila de su día de negocio. Debe
- * llamarse con el `tx` de la misma transacción que crea el pedido o cambia
+ * Suma (+1) o resta (−1) pedidos en la fila de su día de negocio. Debe
+ * llamarse con el `tx` de la misma transacción que crea los pedidos o cambia
  * su estado desde/hacia CANCELLED, así métricas y pedidos nunca divergen.
- * Lee totales y partidas de la BD, por lo que el pedido y sus order_items
- * ya deben existir dentro de `tx`.
+ * Lee totales y partidas de la BD, por lo que los pedidos y sus order_items
+ * ya deben existir dentro de `tx`. Varios pedidos del mismo día se agregan
+ * en una sola operación sobre esa fila.
  *
  * - +1 usa upsert: el primer pedido del día crea la fila.
  * - −1 usa UPDATE: en un INSERT … ON CONFLICT, Postgres evalúa los CHECK
  *   (>= 0) sobre la fila propuesta *antes* de detectar el conflicto, así que
  *   un upsert con valores negativos fallaría aunque la fila exista.
- * Ambos son atómicos a nivel de fila: dos pedidos simultáneos del mismo día
- * se serializan en el lock de esa fila, sin perder incrementos.
+ * Ambos son atómicos a nivel de fila: dos transacciones simultáneas del
+ * mismo día se serializan en el lock de esa fila, sin perder incrementos.
  */
-export async function applyOrderToDailyMetrics(
+export async function applyOrdersToDailyMetrics(
   tx: Prisma.TransactionClient,
-  orderId: string,
+  orderIds: string[],
   direction: 1 | -1,
 ): Promise<void> {
+  if (orderIds.length === 0) return;
+
   if (direction === 1) {
     await tx.$executeRaw`
       INSERT INTO "daily_sales_metrics" AS m
         ("day", "orders_count", "revenue_cents", "cost_cents", "items_sold", "updated_at")
       SELECT
         (o."created_at" AT TIME ZONE ${BUSINESS_TIMEZONE}::text)::date,
-        1,
-        o."total_cents",
-        o."cost_cents",
-        COALESCE((SELECT SUM(i."quantity") FROM "order_items" i WHERE i."order_id" = o."id"), 0)::int,
+        COUNT(*)::int,
+        SUM(o."total_cents")::int,
+        SUM(o."cost_cents")::int,
+        COALESCE(SUM(i."items"), 0)::int,
         now()
       FROM "orders" o
-      WHERE o."id" = ${orderId}::uuid
+      LEFT JOIN (
+        SELECT "order_id", SUM("quantity") AS "items"
+        FROM "order_items"
+        WHERE "order_id" = ANY(${orderIds}::uuid[])
+        GROUP BY "order_id"
+      ) i ON i."order_id" = o."id"
+      WHERE o."id" = ANY(${orderIds}::uuid[])
+      GROUP BY 1
       ON CONFLICT ("day") DO UPDATE SET
         "orders_count"  = m."orders_count"  + EXCLUDED."orders_count",
         "revenue_cents" = m."revenue_cents" + EXCLUDED."revenue_cents",
@@ -128,23 +138,45 @@ export async function applyOrderToDailyMetrics(
     return;
   }
 
-  const updated = await tx.$executeRaw`
-    UPDATE "daily_sales_metrics" AS m SET
-      "orders_count"  = m."orders_count"  - 1,
-      "revenue_cents" = m."revenue_cents" - o."total_cents",
-      "cost_cents"    = m."cost_cents"    - o."cost_cents",
-      "items_sold"    = m."items_sold"
-                        - COALESCE((SELECT SUM(i."quantity") FROM "order_items" i WHERE i."order_id" = o."id"), 0)::int,
-      "updated_at"    = now()
-    FROM "orders" o
-    WHERE o."id" = ${orderId}::uuid
-      AND m."day" = (o."created_at" AT TIME ZONE ${BUSINESS_TIMEZONE}::text)::date
+  const [result] = await tx.$queryRaw<{ expected: number; updated: number }[]>`
+    WITH "delta" AS (
+      SELECT
+        (o."created_at" AT TIME ZONE ${BUSINESS_TIMEZONE}::text)::date AS "day",
+        COUNT(*)::int AS "orders",
+        SUM(o."total_cents")::int AS "revenue",
+        SUM(o."cost_cents")::int AS "cost",
+        COALESCE(SUM(i."items"), 0)::int AS "items"
+      FROM "orders" o
+      LEFT JOIN (
+        SELECT "order_id", SUM("quantity") AS "items"
+        FROM "order_items"
+        WHERE "order_id" = ANY(${orderIds}::uuid[])
+        GROUP BY "order_id"
+      ) i ON i."order_id" = o."id"
+      WHERE o."id" = ANY(${orderIds}::uuid[])
+      GROUP BY 1
+    ), "updated" AS (
+      UPDATE "daily_sales_metrics" AS m SET
+        "orders_count"  = m."orders_count"  - d."orders",
+        "revenue_cents" = m."revenue_cents" - d."revenue",
+        "cost_cents"    = m."cost_cents"    - d."cost",
+        "items_sold"    = m."items_sold"    - d."items",
+        "updated_at"    = now()
+      FROM "delta" d
+      WHERE m."day" = d."day"
+      RETURNING m."day"
+    )
+    SELECT
+      (SELECT COUNT(*) FROM "delta")::int AS "expected",
+      (SELECT COUNT(*) FROM "updated")::int AS "updated"
   `;
 
-  // Si no hay fila que restar, la tabla ya estaba desincronizada. Se deja
+  // Si falta la fila de algún día, la tabla ya estaba desincronizada. Se deja
   // pasar la mutación del usuario y se avisa: rebuildDailySalesMetrics la repara.
-  if (updated === 0) {
-    console.warn(`[metrics] sin fila de daily_sales_metrics para restar el pedido ${orderId}`);
+  if (result && result.updated < result.expected) {
+    console.warn(
+      `[metrics] faltan ${result.expected - result.updated} fila(s) de daily_sales_metrics al restar pedidos`,
+    );
   }
 }
 
