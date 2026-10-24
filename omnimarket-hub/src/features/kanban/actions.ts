@@ -5,8 +5,23 @@ import { moveOrderSchema, type MoveOrderInput } from "@/features/kanban/schemas"
 import type { ActionResult } from "@/lib/action-result";
 import { invalidInput, runAction } from "@/server/action-utils";
 import { ANALYTICS_CACHE_TAG } from "@/server/dal/analytics";
-import { moveOrder as moveOrderInDb, type OrderSummary } from "@/server/dal/orders";
+import {
+  getKanbanBoard,
+  moveOrder as moveOrderInDb,
+  type KanbanBoard,
+  type OrderSummary,
+} from "@/server/dal/orders";
 import { requireSession } from "@/server/session";
+
+/**
+ * Lectura del tablero para TanStack Query: el RSC la llama directo para el
+ * prefetch y el cliente la usa como queryFn en los refetch. A diferencia de
+ * las mutaciones, lanza si falla: useQuery gestiona el error y los reintentos.
+ */
+export async function fetchKanbanBoard(): Promise<KanbanBoard> {
+  await requireSession();
+  return getKanbanBoard();
+}
 
 /**
  * Drag & Drop de una tarjeta. Errores que el cliente debe manejar con

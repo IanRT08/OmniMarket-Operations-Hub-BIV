@@ -1,26 +1,42 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Paleta OmniMarket. Contrastes medidos (WCAG 2.x):
+ *   blanco sobre moss (#756F37)       5.1:1 → botones primarios (AA)
+ *   blanco sobre moss-dark (#5E592C)  7.1:1 → hover del botón primario
+ *   ink sobre mint (#A3DA98)          9.9:1 → chips y resaltados
+ *   ink sobre sage (#9CC188)          7.9:1 → botones secundarios
+ *   ink sobre surface                14.8:1 → texto principal
+ *   ink-muted sobre surface           7.6:1 → texto secundario
+ *   moss sobre surface                4.8:1 → enlaces y títulos de acento
+ * olive (3.1:1) y lime (2.1:1) no llevan texto blanco: se usan en bordes,
+ * anillos de foco y acentos decorativos.
+ */
+@theme {
+  --color-brand-mint: #a3da98;
+  --color-brand-sage: #9cc188;
+  --color-brand-lime: #9bbf4c;
+  --color-brand-olive: #90984c;
+  --color-brand-moss: #756f37;
+  --color-brand-moss-dark: #5e592c; /* hover de moss, misma familia */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-ink: #1e2416;
+  --color-ink-muted: #4a5238;
+  --color-surface: #f5f8ef;
+  --color-border: #d9e2c8;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Foco visible y consistente (teclado / KeyboardSensor de dnd-kit). */
+:focus-visible {
+  outline: 2px solid var(--color-brand-lime);
+  outline-offset: 2px;
 }
