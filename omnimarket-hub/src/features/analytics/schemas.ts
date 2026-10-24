@@ -1,4 +1,22 @@
+import "@/lib/zod-locale";
 import { z } from "zod";
+
+/** Rangos del dashboard (presets, sin calendario: "últimos N días"). */
+export const DASHBOARD_RANGES = [7, 30, 90] as const;
+export type DashboardRange = (typeof DASHBOARD_RANGES)[number];
+export const DASHBOARD_DEFAULT_RANGE: DashboardRange = 30;
+
+export const dashboardRangeSchema = z.coerce
+  .number()
+  .refine((days): days is DashboardRange => (DASHBOARD_RANGES as readonly number[]).includes(days), {
+    message: "Rango no soportado",
+  });
+
+/** ?days= de la URL → rango válido (cualquier otro valor cae al default). */
+export function parseDashboardRange(raw: string | string[] | undefined): DashboardRange {
+  const parsed = dashboardRangeSchema.safeParse(Array.isArray(raw) ? raw[0] : raw);
+  return parsed.success ? (parsed.data as DashboardRange) : DASHBOARD_DEFAULT_RANGE;
+}
 
 export const ANALYTICS_DEFAULT_LIMIT = 50;
 export const ANALYTICS_MAX_LIMIT = 100;

@@ -1,11 +1,12 @@
 "use client";
 
-import { Package, ReceiptText, SquareKanban } from "lucide-react";
+import { LayoutDashboard, Package, ReceiptText, SquareKanban } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/orders", label: "Pedidos", icon: ReceiptText },
   { href: "/kanban", label: "Kanban", icon: SquareKanban },
   { href: "/products", label: "Productos", icon: Package },

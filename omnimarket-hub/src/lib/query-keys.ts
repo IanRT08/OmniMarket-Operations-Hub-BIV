@@ -1,8 +1,13 @@
+import type { DashboardRange } from "@/features/analytics/schemas";
 import type { OrderListQuery } from "@/features/orders/schemas";
 
 // Llaves de TanStack Query centralizadas: el prefetch del RSC, los hooks y
 // las invalidaciones usan exactamente las mismas.
 export const queryKeys = {
+  analytics: {
+    all: ["analytics"] as const,
+    dashboard: (days: DashboardRange) => [...queryKeys.analytics.all, "dashboard", days] as const,
+  },
   kanban: {
     all: ["kanban"] as const,
     board: () => [...queryKeys.kanban.all, "board"] as const,

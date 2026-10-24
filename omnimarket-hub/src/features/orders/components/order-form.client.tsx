@@ -57,6 +57,7 @@ export function OrderForm({ products }: { products: ProductOption[] }) {
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.kanban.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.analytics.all });
       router.push("/orders");
     },
     onError: (error) => {

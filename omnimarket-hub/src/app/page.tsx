@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// El dashboard de KPIs aún no existe: por ahora el inicio es el Kanban.
+// El inicio de la app es el dashboard (proxy.ts y el layout exigen sesión).
 export default function Home() {
-  redirect("/kanban");
+  redirect("/dashboard");
 }

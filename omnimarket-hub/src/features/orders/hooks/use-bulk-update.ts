@@ -69,6 +69,7 @@ export function useBulkUpdate() {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.kanban.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.analytics.all });
     },
   });
 }

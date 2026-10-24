@@ -5,7 +5,7 @@ import { LoginButtons } from "./login-buttons.client";
 
 export const metadata: Metadata = { title: "Iniciar sesión" };
 
-const DEFAULT_REDIRECT = "/kanban";
+const DEFAULT_REDIRECT = "/dashboard";
 
 // Solo rutas internas: evita usar el login como redirección abierta a otro dominio.
 function safeCallbackUrl(value: string | string[] | undefined) {
