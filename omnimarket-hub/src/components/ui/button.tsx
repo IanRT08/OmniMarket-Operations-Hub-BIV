@@ -15,23 +15,21 @@ const SIZES = {
   lg: "h-11 px-5 text-base",
 } as const;
 
-export type ButtonProps = React.ComponentProps<"button"> & {
-  variant?: keyof typeof VARIANTS;
-  size?: keyof typeof SIZES;
-};
+type ButtonStyle = { variant?: keyof typeof VARIANTS; size?: keyof typeof SIZES; className?: string };
 
-export function Button({ className, variant = "primary", size = "md", type = "button", ...props }: ButtonProps) {
-  return (
-    <button
-      type={type}
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors",
-        "disabled:pointer-events-none disabled:opacity-50",
-        VARIANTS[variant],
-        SIZES[size],
-        className,
-      )}
-      {...props}
-    />
+/** Clases de botón reutilizables en otros elementos (p. ej. <Link> con aspecto de botón). */
+export function buttonClasses({ variant = "primary", size = "md", className }: ButtonStyle = {}) {
+  return cn(
+    "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors",
+    "disabled:pointer-events-none disabled:opacity-50",
+    VARIANTS[variant],
+    SIZES[size],
+    className,
   );
+}
+
+export type ButtonProps = React.ComponentProps<"button"> & Omit<ButtonStyle, "className">;
+
+export function Button({ className, variant, size, type = "button", ...props }: ButtonProps) {
+  return <button type={type} className={buttonClasses({ variant, size, className })} {...props} />;
 }

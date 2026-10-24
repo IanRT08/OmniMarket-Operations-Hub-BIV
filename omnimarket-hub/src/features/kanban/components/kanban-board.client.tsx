@@ -31,7 +31,6 @@ import {
 } from "@/lib/kanban-board";
 import { ORDER_STATUS_FLOW, statusLabel } from "@/lib/order-status";
 import { mutationKeys } from "@/lib/query-keys";
-import { cn } from "@/lib/utils";
 import type { KanbanCard } from "@/server/dal/orders";
 import { KanbanColumn } from "./kanban-column.client";
 import { KanbanBoardSkeleton } from "./kanban-skeleton";
@@ -168,7 +167,7 @@ export function KanbanBoard() {
       <div className="flex h-8 items-center justify-end gap-3 text-xs text-ink-muted">
         <span aria-live="polite">{isFetching ? "Actualizando…" : "Se actualiza automáticamente"}</span>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} aria-label="Actualizar tablero">
-          <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} aria-hidden="true" />
+          <RefreshCw className="size-3.5" aria-hidden="true" />
           Actualizar
         </Button>
       </div>

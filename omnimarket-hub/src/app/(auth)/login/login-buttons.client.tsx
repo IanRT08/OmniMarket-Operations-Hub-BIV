@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle, LogIn } from "lucide-react";
+import { LogIn } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,12 +30,8 @@ export function LoginButtons({ callbackURL }: { callbackURL: string }) {
     <div className="flex flex-col gap-3">
       {PROVIDERS.map(({ id, label, variant }) => (
         <Button key={id} variant={variant} size="lg" disabled={pending !== null} onClick={() => signIn(id)}>
-          {pending === id ? (
-            <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <LogIn className="size-4" aria-hidden="true" />
-          )}
-          {label}
+          <LogIn className="size-4" aria-hidden="true" />
+          {pending === id ? "Redirigiendo…" : label}
         </Button>
       ))}
     </div>

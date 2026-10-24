@@ -1,3 +1,4 @@
+import "@/lib/zod-locale";
 import { z } from "zod";
 import { OrderStatus } from "@/generated/prisma/enums";
 import { isValidPosition } from "@/lib/position";

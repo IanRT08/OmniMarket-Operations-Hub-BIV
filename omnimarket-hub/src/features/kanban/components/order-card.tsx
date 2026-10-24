@@ -1,4 +1,4 @@
-import { LoaderCircle, Package } from "lucide-react";
+import { Package } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { BUSINESS_TIMEZONE } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,8 @@ export function OrderCard({ card, overlay, placeholder, saving }: OrderCardProps
         "rounded-lg border border-border bg-white p-3 shadow-sm transition-shadow",
         "hover:border-brand-olive hover:shadow",
         overlay && "rotate-1 cursor-grabbing border-brand-olive shadow-lg ring-2 ring-brand-lime/60",
+        // Guardando: pulso tipo skeleton en lugar de un spinner.
+        saving && "animate-pulse border-brand-olive ring-1 ring-brand-lime/50",
         placeholder && "border-dashed border-brand-olive bg-brand-mint/20 shadow-none [&>*]:invisible",
       )}
     >
@@ -48,7 +50,7 @@ export function OrderCard({ card, overlay, placeholder, saving }: OrderCardProps
           {card.itemsCount} {card.itemsCount === 1 ? "artículo" : "artículos"}
         </span>
         <span className="inline-flex items-center gap-1.5">
-          {saving && <LoaderCircle className="size-3.5 animate-spin text-brand-moss" aria-label="Guardando" />}
+          {saving && <span className="sr-only">Guardando…</span>}
           <time dateTime={new Date(card.createdAt).toISOString()}>
             {createdAtFormatter.format(new Date(card.createdAt))}
           </time>

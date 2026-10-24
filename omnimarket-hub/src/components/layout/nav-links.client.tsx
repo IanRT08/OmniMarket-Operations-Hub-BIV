@@ -1,12 +1,15 @@
 "use client";
 
-import { SquareKanban } from "lucide-react";
+import { Package, ReceiptText, SquareKanban } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
-// Se agregan entradas conforme existan las páginas (dashboard, pedidos, productos).
-const NAV_ITEMS = [{ href: "/kanban", label: "Kanban", icon: SquareKanban }] as const;
+const NAV_ITEMS = [
+  { href: "/orders", label: "Pedidos", icon: ReceiptText },
+  { href: "/kanban", label: "Kanban", icon: SquareKanban },
+  { href: "/products", label: "Productos", icon: Package },
+] as const;
 
 export function NavLinks() {
   const pathname = usePathname();

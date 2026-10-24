@@ -95,6 +95,8 @@ export function useMoveOrder() {
       if (queryClient.isMutating({ mutationKey: mutationKeys.moveOrder }) === 1) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.kanban.board() });
       }
+      // La tabla de pedidos muestra el mismo estado: que no quede desactualizada.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
     },
   });
 

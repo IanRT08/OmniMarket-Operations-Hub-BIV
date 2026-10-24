@@ -8,3 +8,8 @@ export function formatCurrency(cents: number): string {
   const roundedCents = Math.round(cents) || 0; // `|| 0` convierte -0 en 0
   return mxnFormatter.format(roundedCents / 100);
 }
+
+/** Pesos capturados en un formulario → centavos enteros: 12.5 → 1250, 0.1 + 0.2 → 30. */
+export function pesosToCents(pesos: number): number {
+  return Math.round(pesos * 100) || 0;
+}
