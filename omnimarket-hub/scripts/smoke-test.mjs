@@ -35,16 +35,26 @@ async function json(response) {
   }
 }
 
-try {
+async function main() {
   // 1. La app responde por HTTPS y es OmniMarket.
   const { response: login } = await get("/login");
   const html = await login.text();
   check(base.startsWith("https://"), "Se sirve por HTTPS", "Usa la URL https:// de Vercel");
-  check(
-    login.status === 200 && /<title>[^<]*OmniMarket<\/title>/.test(html),
-    `/login responde 200 y es esta app (HTTP ${login.status})`,
-    "¿Es la URL correcta? ¿El último despliegue terminó bien?",
-  );
+  const isThisApp = login.status === 200 && /<title>[^<]*OmniMarket<\/title>/.test(html);
+  check(isThisApp, `/login responde 200 y es esta app (HTTP ${login.status})`);
+  if (!isThisApp) {
+    // Sin la app correcta, el resto de verificaciones daría pistas engañosas.
+    console.log(
+      [
+        "",
+        "  El dominio responde, pero no con esta versión de la app. Causas probables:",
+        "  · El pipeline no ha desplegado todavía: revisa la pestaña Actions del repo (job «Desplegar a producción»).",
+        "  · El deploy falló: abre el log del job; si faltan secretos de Vercel, lo dice por nombre.",
+        "  · La URL no es la del proyecto: usa la que muestra «View deployment» en la corrida.",
+      ].join("\n"),
+    );
+    return false;
+  }
 
   // 2. Rutas privadas protegidas sin sesión.
   const { response: dash } = await get("/dashboard");
@@ -126,10 +136,18 @@ try {
     `POST /api/test/reset-data sin token → 401 (HTTP ${reset.status})`,
     reset.status === 503 ? "Falta AUDIT_TOKEN en Vercel" : undefined,
   );
+  return true;
+}
+
+let complete = false;
+try {
+  complete = await main();
 } catch (error) {
   check(false, `No se pudo conectar con ${host}`, error instanceof Error ? error.message : String(error));
 }
 
 const failed = results.filter((ok) => !ok).length;
-console.log(failed === 0 ? `\nTodo en orden en ${host}.` : `\n${failed} verificación(es) fallaron en ${host}.`);
-process.exit(failed === 0 ? 0 : 1);
+if (complete) console.log(failed === 0 ? `\nTodo en orden en ${host}.` : `\n${failed} verificación(es) fallaron en ${host}.`);
+// exitCode en vez de process.exit(): cerrar con sockets de fetch abiertos
+// dispara un assert de libuv en Windows.
+process.exitCode = failed === 0 ? 0 : 1;

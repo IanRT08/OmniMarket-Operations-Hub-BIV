@@ -6,7 +6,7 @@ Dashboard analítico para la gestión de un e-commerce: KPIs de ventas, tabla de
 
 | | |
 |---|---|
-| **Producción** | `https://<https://omni-market-operations-hub-biv.vercel.app/>` |
+| **Producción** | `https://omni-market-operations-hub-biv.vercel.app` |
 | **Pipeline CI/CD** | [GitHub Actions](https://github.com/IanRT08/OmniMarket-Operations-Hub-BIV/actions/workflows/ci.yml) |
 | **Token de auditoría** | Se entrega por separado (no se publica en el repositorio) |
 
@@ -17,7 +17,7 @@ Dashboard analítico para la gestión de un e-commerce: KPIs de ventas, tabla de
 Los pasos de la *Lista de Comprobación para el Evaluador* (sección 6 de los lineamientos), con los comandos listos. Sustituye `$URL` por la URL de producción y `$TOKEN` por el token de auditoría.
 
 ```bash
-URL=https://<https://omni-market-operations-hub-biv.vercel.app/>
+URL=https://omni-market-operations-hub-biv.vercel.app
 TOKEN=<token-de-auditoría>
 ```
 
@@ -149,23 +149,27 @@ Restablece el dataset de prueba conocido y responde con los conteos:
 | Pruebas | Vitest, Playwright |
 
 ```
-src/
-├── app/
-│   ├── (auth)/login/               # inicio de sesión (Google / GitHub)
-│   ├── (dashboard)/                # layout con requireSession() + navegación
-│   │   ├── dashboard/  orders/  orders/new/  kanban/  products/  products/new/
-│   └── api/
-│       ├── auth/[...all]/          # Better Auth
-│       └── test/                   # endpoints de auditoría
-├── features/                       # módulos por dominio: actions, schemas, queries, hooks, componentes
-│   ├── analytics/  kanban/  orders/  products/
-├── server/                         # solo servidor ("server-only")
-│   ├── dal/                        # Data Access Layer: única puerta a la base de datos
-│   ├── auth.ts  session.ts  db.ts  test-guard.ts
-├── lib/                            # funciones puras (objetivo de los tests unitarios)
-└── proxy.ts                        # chequeo rápido de cookie (middleware en Next 16)
-prisma/                             # schema, migraciones y seed
-e2e/   tests/                       # Playwright y Vitest
+.github/workflows/ci.yml            # pipeline CI/CD (en la raíz del repo, donde GitHub lo busca)
+omnimarket-hub/                     # la aplicación Next.js
+├── src/
+│   ├── app/
+│   │   ├── (auth)/login/           # inicio de sesión (Google / GitHub)
+│   │   ├── (dashboard)/            # layout con requireSession() + navegación
+│   │   │   └── dashboard/  orders/  orders/new/  kanban/  products/  products/new/
+│   │   └── api/
+│   │       ├── auth/[...all]/      # Better Auth
+│   │       └── test/               # endpoints de auditoría
+│   ├── features/                   # módulos por dominio: actions, schemas, queries, hooks, componentes
+│   │   └── analytics/  kanban/  orders/  products/
+│   ├── server/                     # solo servidor ("server-only")
+│   │   ├── dal/                    # Data Access Layer: única puerta a la base de datos
+│   │   └── auth.ts  session.ts  db.ts  test-guard.ts
+│   ├── lib/                        # funciones puras (objetivo de los tests unitarios)
+│   └── proxy.ts                    # chequeo rápido de cookie (middleware en Next 16)
+├── prisma/                         # schema, migraciones y seed
+├── e2e/   tests/                   # Playwright y Vitest
+├── scripts/smoke-test.mjs          # verificación del despliegue
+└── vercel.json                     # región iad1 y auto-deploy por Git desactivado
 ```
 
 **Decisiones clave**
@@ -212,14 +216,14 @@ La sesión E2E se simula: el reset crea una sesión con un token conocido y `aut
 
 ## CI/CD
 
-`.github/workflows/ci.yml`, en cada push a `main` y en cada pull request:
+`.github/workflows/ci.yml` (en la raíz del repositorio; sus comandos corren dentro de `omnimarket-hub/`), en cada push a `main` y en cada pull request:
 
 ```
 Lint y typecheck ──► Tests unitarios ──► Tests E2E (Postgres 17) ──► Desplegar a producción
                                                                      (solo push a main)
 ```
 
-El auto-deploy por Git de Vercel está desactivado (`vercel.json` → `"git": { "deploymentEnabled": false }`), así que **la única vía a producción es el último job**, y solo se ejecuta si los tres anteriores pasan. Los E2E corren contra un Postgres efímero con secretos de prueba; nunca tocan producción.
+El auto-deploy por Git de Vercel está desactivado (`omnimarket-hub/vercel.json` → `"git": { "deploymentEnabled": false }`), así que **la única vía a producción es el último job**, y solo se ejecuta si los tres anteriores pasan. Los E2E corren contra un Postgres efímero con secretos de prueba; nunca tocan producción.
 
 Secretos del repositorio (*Settings → Secrets and variables → Actions*): `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`.
 
@@ -227,9 +231,10 @@ Secretos del repositorio (*Settings → Secrets and variables → Actions*): `VE
 
 ## Desarrollo local
 
-**Requisitos:** Node.js ≥ 22.12 y una base PostgreSQL. Puede ser local, con `npx prisma dev`.
+**Requisitos:** Node.js ≥ 22.12 y una base PostgreSQL. Puede ser local, con `npx prisma dev`. Todos los comandos se ejecutan dentro de `omnimarket-hub/`.
 
 ```bash
+cd omnimarket-hub
 npm install                      # también genera el cliente de Prisma
 cp .env.example .env             # completa los valores
 npm run db:migrate               # aplica las migraciones
@@ -268,12 +273,13 @@ npm run test:e2e
 ## Despliegue en Vercel
 
 1. **Base de datos:** aplica las migraciones y carga el seed en la base de producción (`npm run db:migrate` y `npm run db:seed` con las URLs de producción, o el `reset-data` una vez desplegado).
-2. **Variables de entorno** del proyecto (*Settings → Environment Variables → Production*): todas las de la tabla anterior excepto `E2E_SESSION_TOKEN`. `BETTER_AUTH_URL` debe ser la URL pública (`https://…`) y `ENABLE_TEST_ENDPOINTS=true`.
-3. **OAuth:** registra los callbacks de producción en Google Cloud Console y en una OAuth App de GitHub (GitHub admite una sola callback URL por app; usa apps distintas para local y producción).
-4. **Secretos de GitHub:** `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. Los dos últimos salen de `.vercel/project.json` tras `npx vercel link`.
-5. **Push a `main`.** El pipeline prueba y despliega.
-6. **Verifica el despliegue:**
+2. **Root Directory:** en *Settings → Build and Deployment* del proyecto, **Root Directory = `omnimarket-hub`** (la app no está en la raíz del repositorio).
+3. **Variables de entorno** del proyecto (*Settings → Environment Variables → Production*): todas las de la tabla anterior excepto `E2E_SESSION_TOKEN`. `BETTER_AUTH_URL` debe ser la URL pública (`https://…`) y `ENABLE_TEST_ENDPOINTS=true`.
+4. **OAuth:** registra los callbacks de producción en Google Cloud Console y en una OAuth App de GitHub (GitHub admite una sola callback URL por app; usa apps distintas para local y producción).
+5. **Secretos de GitHub:** `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. Los dos últimos salen de `.vercel/project.json` tras `npx vercel link`.
+6. **Push a `main`.** El pipeline prueba y despliega.
+7. **Verifica el despliegue** (desde `omnimarket-hub/`):
    ```bash
-   npm run smoke -- https://<https://omni-market-operations-hub-biv.vercel.app/>
+   npm run smoke -- https://omni-market-operations-hub-biv.vercel.app
    ```
    Comprueba en solo lectura HTTPS, protección de rutas, Better Auth, los callbacks de ambos OAuth, los endpoints de auditoría con su SLA, el seed y que `reset-data` exija token. Si algo falla, indica qué variable revisar.

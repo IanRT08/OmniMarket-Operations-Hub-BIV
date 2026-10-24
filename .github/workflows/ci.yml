@@ -2,13 +2,17 @@
 #
 #   quality (lint + typecheck) → unit (Vitest) → e2e (Playwright + Postgres) → deploy (Vercel)
 #
+# El repositorio tiene la app en la subcarpeta omnimarket-hub/: GitHub solo lee
+# workflows en la raíz (.github/workflows), así que este archivo vive aquí y
+# todos los comandos corren dentro de omnimarket-hub/ (defaults.run).
+#
 # El despliegue a producción SOLO ocurre si los tres jobs anteriores pasan:
-# vercel.json desactiva el auto-deploy por Git ("git.deploymentEnabled": false),
-# así que la única vía a producción es el job `deploy` de este archivo.
-# Si un test falla, el despliegue simplemente no ocurre.
+# omnimarket-hub/vercel.json desactiva el auto-deploy por Git, así que la
+# única vía a producción es el job `deploy`. Si un test falla, no se despliega.
 #
 # Secretos de GitHub requeridos (Settings → Secrets and variables → Actions),
 # solo para el job deploy: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID.
+# En Vercel, el proyecto debe tener Root Directory = omnimarket-hub.
 
 name: CI
 
@@ -18,7 +22,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Un push nuevo a la misma rama cancela la corrida anterior (salvo el deploy en curso).
+# Un push nuevo a la misma rama cancela la corrida anterior (salvo en main).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -29,6 +33,10 @@ permissions:
 env:
   NODE_VERSION: 24
   NEXT_TELEMETRY_DISABLED: 1
+
+defaults:
+  run:
+    working-directory: omnimarket-hub
 
 jobs:
   quality:
@@ -41,6 +49,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: omnimarket-hub/package-lock.json
       - run: npm ci # postinstall: prisma generate (no necesita BD)
       - run: npm run lint
       - run: npm run typecheck
@@ -56,6 +65,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: omnimarket-hub/package-lock.json
       - run: npm ci
       - run: npm test
 
@@ -104,6 +114,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          cache-dependency-path: omnimarket-hub/package-lock.json
       - run: npm ci
 
       - name: Migraciones (incluye COLLATE "C" y CHECKs)
@@ -137,8 +148,8 @@ jobs:
         with:
           name: playwright-report
           path: |
-            playwright-report/
-            test-results/
+            omnimarket-hub/playwright-report/
+            omnimarket-hub/test-results/
           retention-days: 14
           if-no-files-found: ignore
 
@@ -156,6 +167,11 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    # La CLI de Vercel corre desde la raíz del repo: con Root Directory =
+    # omnimarket-hub en el proyecto, `vercel build` compila esa subcarpeta.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Verificar secretos de Vercel
         run: |
@@ -171,9 +187,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
       - run: npm install --global vercel@65.2.0
-      # Trae la configuración y las variables de entorno de Production del proyecto.
+      # Trae la configuración (incluido Root Directory) y las variables de Production.
       - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
       - run: vercel build --prod --token="$VERCEL_TOKEN"
       - name: Deploy
