@@ -4,10 +4,10 @@ import { randomInt } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { OrderStatus } from "@/generated/prisma/enums";
 import type { MoveOrderData } from "@/features/kanban/schemas";
-import type { BulkUpdateData, CreateOrderData } from "@/features/orders/schemas";
-import { toBusinessDay } from "@/lib/dates";
+import type { BulkUpdateData, CreateOrderData, OrderListQuery } from "@/features/orders/schemas";
+import { addDays, businessDayStart, toBusinessDay } from "@/lib/dates";
 import { positionAfter, positionsAfter } from "@/lib/position";
-import { applyOrdersToDailyMetrics } from "@/server/dal/analytics";
+import { applyOrdersToDailyMetrics, countOrdersByStatus } from "@/server/dal/analytics";
 import { releaseStockForOrders, reserveStockForOrders } from "@/server/dal/products";
 import { db } from "@/server/db";
 import { DomainError } from "@/server/errors";
@@ -55,6 +55,128 @@ export async function getOrderKanbanStatus(orderRef: string) {
 }
 
 export type OrderKanbanStatus = NonNullable<Awaited<ReturnType<typeof getOrderKanbanStatus>>>;
+
+// ============================================================================
+// Lecturas para la UI
+// ============================================================================
+
+/**
+ * Tabla de pedidos con paginación y filtros del lado del servidor.
+ *
+ * - Fechas: from/to son días de negocio de CDMX (inclusivos). Se convierten
+ *   a un rango de instantes sobre created_at, así se usa el índice
+ *   orders(created_at DESC) en lugar de convertir cada fila de zona horaria.
+ * - Búsqueda: ILIKE '%q%' sobre número, nombre y email. No usa índice; con
+ *   cientos de miles de pedidos convendría un índice trigram (pg_trgm).
+ * - Orden: más recientes primero, con id como desempate estable entre páginas.
+ */
+export async function listOrders({ page, pageSize, status, from, to, q }: OrderListQuery) {
+  const where: Prisma.OrderWhereInput = {
+    ...(status.length > 0 && { status: { in: status } }),
+    ...((from || to) && {
+      createdAt: {
+        ...(from && { gte: businessDayStart(from) }),
+        ...(to && { lt: businessDayStart(addDays(to, 1)) }),
+      },
+    }),
+    ...(q && {
+      OR: [
+        { orderNumber: { contains: q, mode: "insensitive" } },
+        { customerName: { contains: q, mode: "insensitive" } },
+        { customerEmail: { contains: q, mode: "insensitive" } },
+      ],
+    }),
+  };
+
+  const [rows, total] = await Promise.all([
+    db.order.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        orderNumber: true,
+        customerName: true,
+        customerEmail: true,
+        status: true,
+        version: true,
+        totalCents: true,
+        costCents: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: { select: { items: true } },
+      },
+    }),
+    db.order.count({ where }),
+  ]);
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  return {
+    rows: rows.map(({ _count, ...order }) => ({ ...order, itemsCount: _count.items })),
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1 && totalPages > 0,
+    },
+  };
+}
+
+export type OrderList = Awaited<ReturnType<typeof listOrders>>;
+export type OrderListItem = OrderList["rows"][number];
+
+export const KANBAN_COLUMN_LIMIT = 100;
+
+/**
+ * Tablero completo: una columna por estado, ordenada por `position`.
+ * Cada columna es un Index Scan sobre (status, position) con LIMIT, y las 5
+ * van en paralelo junto con el conteo total por estado. `total` permite a la
+ * UI mostrar "100 de 2,340" cuando una columna (típicamente DELIVERED) excede
+ * el límite.
+ *
+ * `version` viaja en cada tarjeta: moveOrder la exige para detectar
+ * movimientos simultáneos.
+ */
+export async function getKanbanBoard(limitPerColumn: number = KANBAN_COLUMN_LIMIT) {
+  const statuses = Object.values(OrderStatus);
+
+  const [counts, ...columns] = await Promise.all([
+    countOrdersByStatus(),
+    ...statuses.map((status) =>
+      db.order.findMany({
+        where: { status },
+        orderBy: [{ position: "asc" }, { id: "asc" }],
+        take: limitPerColumn,
+        select: {
+          id: true,
+          orderNumber: true,
+          customerName: true,
+          status: true,
+          position: true,
+          version: true,
+          totalCents: true,
+          createdAt: true,
+          _count: { select: { items: true } },
+        },
+      }),
+    ),
+  ]);
+
+  return {
+    columns: statuses.map((status, i) => ({
+      status,
+      total: counts[status],
+      cards: columns[i].map(({ _count, ...card }) => ({ ...card, itemsCount: _count.items })),
+    })),
+  };
+}
+
+export type KanbanBoard = Awaited<ReturnType<typeof getKanbanBoard>>;
+export type KanbanCard = KanbanBoard["columns"][number]["cards"][number];
 
 // ============================================================================
 // Mutaciones. Las usan las Server Actions de orders/ y kanban/. Cada una es

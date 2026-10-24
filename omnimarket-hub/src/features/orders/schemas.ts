@@ -35,6 +35,29 @@ export const bulkUpdateSchema = z.object({
   status: z.enum(OrderStatus),
 });
 
+const businessDaySchema = z.iso.date(); // YYYY-MM-DD, día de negocio en CDMX
+
+// Searchparams de la tabla de pedidos (/orders?page=2&status=PENDING&status=SHIPPED&from=…).
+// Acepta lo que entrega Next en `searchParams`: string, string[] o undefined.
+export const orderListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).max(10_000).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    status: z
+      .preprocess((value) => (value === undefined ? [] : [value].flat()), z.array(z.enum(OrderStatus)))
+      .default([]),
+    from: businessDaySchema.optional(),
+    to: businessDaySchema.optional(),
+    /** Número de pedido, nombre o email del cliente (contiene, sin distinguir mayúsculas). */
+    q: z.string().trim().max(100).optional(),
+  })
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: "La fecha inicial debe ser anterior o igual a la final",
+    path: ["to"],
+  });
+
+export type OrderListQuery = z.output<typeof orderListQuerySchema>;
+
 export type CreateOrderInput = z.input<typeof createOrderSchema>;
 export type CreateOrderData = z.output<typeof createOrderSchema>;
 export type CancelOrderInput = z.input<typeof cancelOrderSchema>;

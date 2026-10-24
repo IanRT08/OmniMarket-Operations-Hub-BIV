@@ -10,15 +10,31 @@ import { db } from "@/server/db";
 /** Tag de caché del resumen de KPIs. Toda mutación de pedidos lo revalida. */
 export const ANALYTICS_CACHE_TAG = "analytics";
 
-type Totals = { ordersCount: number; revenueCents: number; costCents: number; itemsSold: number };
+export type Totals = { ordersCount: number; revenueCents: number; costCents: number; itemsSold: number };
 
-function withDerivedKpis(totals: Totals) {
+export function withDerivedKpis(totals: Totals) {
   return {
     ...totals,
     grossMarginCents: grossMarginCents(totals.revenueCents, totals.costCents),
     grossMarginRatio: Number(grossMarginRatio(totals.revenueCents, totals.costCents).toFixed(4)),
     averageTicketCents: averageTicketCents(totals.revenueCents, totals.ordersCount),
   };
+}
+
+/**
+ * Pedidos por estado (columna del Kanban), con 0 para los estados vacíos.
+ * GROUP BY status sobre orders: ningún índice lo acelera (medido: ~57 ms con
+ * 500k pedidos, seq scan paralelo). Si se llega a millones de pedidos,
+ * sustituir por una tabla de contadores mantenida por trigger.
+ */
+export async function countOrdersByStatus(): Promise<Record<OrderStatus, number>> {
+  const groups = await db.order.groupBy({ by: ["status"], _count: { _all: true } });
+  const counts = Object.fromEntries(Object.values(OrderStatus).map((status) => [status, 0])) as Record<
+    OrderStatus,
+    number
+  >;
+  for (const group of groups) counts[group.status] = group._count._all;
+  return counts;
 }
 
 /**
@@ -30,13 +46,10 @@ function withDerivedKpis(totals: Totals) {
  *  - página:  ORDER BY day DESC LIMIT/OFFSET → Index Scan Backward sobre la PK.
  *  - resumen: COUNT + SUM sobre la tabla pre-agregada; el total de la
  *             paginación sale del conteo de días, no de COUNT(*) sobre orders.
- *  - estados: GROUP BY status sobre orders. Ningún índice lo acelera (medido:
- *             ~57 ms con 500k pedidos, seq scan paralelo). Si se llega a
- *             millones de pedidos, sustituir por una tabla de contadores
- *             mantenida por trigger.
+ *  - estados: countOrdersByStatus().
  */
 export async function getSalesAnalytics({ page, limit }: AnalyticsQuery) {
-  const [rows, aggregate, statusGroups] = await Promise.all([
+  const [rows, aggregate, ordersByStatus] = await Promise.all([
     db.dailySalesMetric.findMany({
       orderBy: { day: "desc" },
       skip: (page - 1) * limit,
@@ -47,13 +60,8 @@ export async function getSalesAnalytics({ page, limit }: AnalyticsQuery) {
       _count: { _all: true },
       _sum: { ordersCount: true, revenueCents: true, costCents: true, itemsSold: true },
     }),
-    db.order.groupBy({ by: ["status"], _count: { _all: true } }),
+    countOrdersByStatus(),
   ]);
-
-  const ordersByStatus = Object.fromEntries(
-    Object.values(OrderStatus).map((status) => [status, 0]),
-  ) as Record<OrderStatus, number>;
-  for (const group of statusGroups) ordersByStatus[group.status] = group._count._all;
 
   const totalDays = aggregate._count._all;
   const totalPages = Math.ceil(totalDays / limit);
