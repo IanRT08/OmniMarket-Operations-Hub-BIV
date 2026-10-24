@@ -1,36 +1,279 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# OmniMarket — Operations Hub
 
-## Getting Started
+[![CI](https://github.com/IanRT08/OmniMarket-Operations-Hub-BIV/actions/workflows/ci.yml/badge.svg)](https://github.com/IanRT08/OmniMarket-Operations-Hub-BIV/actions/workflows/ci.yml)
 
-First, run the development server:
+Dashboard analítico para la gestión de un e-commerce: KPIs de ventas, tabla de pedidos con edición en lote, tablero Kanban con Drag & Drop y catálogo de productos. Next.js 16 (App Router) + TypeScript + Tailwind CSS, PostgreSQL y autenticación OAuth 2.0 con Google y GitHub.
+
+| | |
+|---|---|
+| **Producción** | `https://<https://omni-market-operations-hub-biv.vercel.app/>` |
+| **Pipeline CI/CD** | [GitHub Actions](https://github.com/IanRT08/OmniMarket-Operations-Hub-BIV/actions/workflows/ci.yml) |
+| **Token de auditoría** | Se entrega por separado (no se publica en el repositorio) |
+
+---
+
+## Para el evaluador
+
+Los pasos de la *Lista de Comprobación para el Evaluador* (sección 6 de los lineamientos), con los comandos listos. Sustituye `$URL` por la URL de producción y `$TOKEN` por el token de auditoría.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+URL=https://<https://omni-market-operations-hub-biv.vercel.app/>
+TOKEN=<token-de-auditoría>
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 1. Autenticación OAuth
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Abre `$URL`. Sin sesión, cualquier ruta privada redirige a `/login`, que ofrece **Continuar con Google** y **Continuar con GitHub**. Tras iniciar sesión se regresa a la ruta solicitada.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 2. Latencia SLA de `GET /api/test/analytics`
 
-## Learn More
+```bash
+curl -s -o /dev/null -D - "$URL/api/test/analytics?page=1&limit=50" | grep -i server-timing
+curl -s "$URL/api/test/analytics?page=1&limit=50" | jq .meta
+```
 
-To learn more about Next.js, take a look at the following resources:
+Cada respuesta incluye `meta.durationMs` y el header `Server-Timing` (también visible en *DevTools → Network → Timing*), para que la latencia del servidor se pueda medir y no solo afirmar. La primera petición tras un periodo de inactividad incluye el arranque en frío de la función serverless; las siguientes reflejan el tiempo normal.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 3. Drag & Drop con persistencia
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Restablece el dataset conocido (opcional):
+   ```bash
+   curl -s -X POST -H "x-audit-token: $TOKEN" "$URL/api/test/reset-data" | jq .data
+   ```
+2. En **Kanban**, arrastra la tarjeta **OM-E2E-0001** (primera de *Pendiente*) a otra columna. La tarjeta cambia al instante (actualización optimista) y aparece un toast de confirmación. También se puede mover con teclado: enfocar la tarjeta, **Espacio**, flechas, **Espacio**.
+3. Verifica que el cambio se guardó en la base de datos:
+   ```bash
+   curl -s "$URL/api/test/kanban-status?orderId=OM-E2E-0001" | jq .data
+   ```
+   `order.status` muestra el estado nuevo y `lastEvent` el movimiento (`fromStatus` → `toStatus`).
 
-## Deploy on Vercel
+### 4. Pipeline de integración continua
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+En la pestaña **Actions** del repositorio, la última corrida de `CI` sobre `main` debe tener los cuatro jobs en verde: *Lint y typecheck → Tests unitarios → Tests E2E → Desplegar a producción*. El enlace **View deployment** de la corrida apunta a la versión desplegada.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Otras funciones a revisar
+
+- **Bulk Update** — *Pedidos*: selecciona varias filas, elige un estado y pulsa **Aplicar**. Cambio optimista, toast con el resumen y reversión si el servidor falla.
+- **Creación** — *Pedidos → Nuevo pedido* y *Productos → Nuevo producto*. El registro aparece en su tabla al guardar.
+- **Dashboard** — KPIs del periodo (7 / 30 / 90 días), ingresos por día y pedidos por estado; se refresca cada 30 s.
+
+---
+
+## Endpoints de auditoría
+
+Habilitados con `ENABLE_TEST_ENDPOINTS=true`; si no, responden 404. Todas las respuestas son JSON con `meta.durationMs` y el header `Server-Timing`.
+
+### `GET /api/test/analytics?page=1&limit=50`
+
+Métricas de ventas por día (zona horaria America/Mexico_City), paginadas.
+
+| Parámetro | Tipo | Default | Regla |
+|---|---|---|---|
+| `page` | entero | 1 | ≥ 1 |
+| `limit` | entero | 50 | 1 – 100 |
+
+```jsonc
+{
+  "data": [
+    { "day": "2026-10-05", "ordersCount": 3, "revenueCents": 2598600, "costCents": 1547000,
+      "itemsSold": 14, "grossMarginCents": 1051600, "grossMarginRatio": 0.4047, "averageTicketCents": 866200 }
+  ],
+  "summary": { "days": 35, "ordersCount": 95, "revenueCents": 74798200, "...": "...",
+               "ordersByStatus": { "PENDING": 21, "PROCESSING": 21, "SHIPPED": 21, "DELIVERED": 32, "CANCELLED": 10 } },
+  "pagination": { "page": 1, "limit": 50, "total": 35, "totalPages": 1, "hasNextPage": false, "hasPreviousPage": false },
+  "meta": { "durationMs": 12.4 }
+}
+```
+
+Parámetros inválidos → `400` con el detalle por campo. Montos en centavos (`revenueCents: 2598600` = $25,986.00 MXN).
+
+**Cómo cumple el SLA < 300 ms:** lee la tabla pre-agregada `daily_sales_metrics` (una fila por día, actualizada en la misma transacción que crea, cancela o mueve pedidos) en lugar de sumar todos los pedidos; pagina sobre la llave primaria y lanza sus consultas en paralelo. Las funciones de Vercel (`iad1`) y la base de datos (us-east-1) están en la misma región.
+
+### `GET /api/test/kanban-status?orderId=OM-E2E-0001`
+
+Estado actual de un pedido y su último movimiento. `orderId` acepta el UUID o el número de pedido.
+
+```jsonc
+{
+  "ok": true,
+  "data": {
+    "order": { "id": "b0000000-0000-4000-8000-000000000001", "orderNumber": "OM-E2E-0001",
+               "status": "PROCESSING", "position": "a0", "version": 2, "updatedAt": "…" },
+    "lastEvent": { "id": "275", "fromStatus": "PENDING", "toStatus": "PROCESSING",
+                   "actorId": "…", "createdAt": "…" }
+  },
+  "meta": { "durationMs": 8.1 }
+}
+```
+
+`404` si el pedido no existe; `400` si falta `orderId`. No usa caché: refleja el movimiento al instante.
+
+### `POST /api/test/reset-data` — header `x-audit-token` obligatorio
+
+Restablece el dataset de prueba conocido y responde con los conteos:
+
+```json
+{ "ok": true, "data": { "products": 12, "orders": 105, "orderItems": 228, "statusEvents": 274, "dailyMetrics": 35, "e2eSession": false } }
+```
+
+- Sin token o con token incorrecto → `401`; comparación en tiempo constante.
+- Una sola transacción: o queda el seed completo, o la base queda como estaba. Un *advisory lock* serializa resets simultáneos.
+- Solo toca las tablas de negocio. Las de autenticación quedan intactas, así que tu sesión OAuth sigue activa.
+- Dataset determinista: IDs, fechas y posiciones fijas. **OM-E2E-0001** es siempre la primera tarjeta de *Pendiente*.
+
+---
+
+## Cobertura de la matriz de evaluación
+
+| Módulo | Implementación |
+|---|---|
+| **1. Arquitectura & Next.js** | App Router, TypeScript estricto y Tailwind CSS 4. Server Components por defecto, Client Components solo con interactividad. Un test E2E recorre todas las páginas y falla ante cualquier error de consola. |
+| **2. Endpoints de auditoría** | Los tres endpoints de arriba, con `Server-Timing` y SLA verificado en E2E. |
+| **3. Drag & Drop y CRUD** | Kanban con dnd-kit (puntero y teclado), mutación optimista con reversión y control de concurrencia por versión. Bulk Update de hasta 100 pedidos. Alta de pedidos y productos. Toasts y skeletons en toda carga. |
+| **4. Pruebas & CI/CD** | 37 tests unitarios (Vitest) y 30 E2E (Playwright) que cubren los 3 flujos obligatorios. El pipeline bloquea el despliegue si algo falla. |
+| **5. Despliegue** | Vercel (`iad1`) + PostgreSQL en Supabase (us-east-1), SSL de Vercel. |
+
+---
+
+## Arquitectura
+
+| Capa | Tecnología |
+|---|---|
+| Framework | Next.js 16 (App Router), React 19, TypeScript |
+| Estilos / UI | Tailwind CSS 4, componentes estilo shadcn/ui, Sonner (toasts), Recharts |
+| Datos en cliente | TanStack Query 5 (cache, optimismo, refresco), TanStack Table 9 |
+| Formularios | React Hook Form + Zod 4 (los mismos esquemas en cliente, Server Actions y tests) |
+| Drag & Drop | `@dnd-kit/core` + `@dnd-kit/sortable`, índices fraccionales (`fractional-indexing`) |
+| Base de datos | PostgreSQL (Supabase), Prisma ORM 7 con `@prisma/adapter-pg` |
+| Autenticación | Better Auth — OAuth 2.0 con Google y GitHub |
+| Pruebas | Vitest, Playwright |
+
+```
+src/
+├── app/
+│   ├── (auth)/login/               # inicio de sesión (Google / GitHub)
+│   ├── (dashboard)/                # layout con requireSession() + navegación
+│   │   ├── dashboard/  orders/  orders/new/  kanban/  products/  products/new/
+│   └── api/
+│       ├── auth/[...all]/          # Better Auth
+│       └── test/                   # endpoints de auditoría
+├── features/                       # módulos por dominio: actions, schemas, queries, hooks, componentes
+│   ├── analytics/  kanban/  orders/  products/
+├── server/                         # solo servidor ("server-only")
+│   ├── dal/                        # Data Access Layer: única puerta a la base de datos
+│   ├── auth.ts  session.ts  db.ts  test-guard.ts
+├── lib/                            # funciones puras (objetivo de los tests unitarios)
+└── proxy.ts                        # chequeo rápido de cookie (middleware en Next 16)
+prisma/                             # schema, migraciones y seed
+e2e/   tests/                       # Playwright y Vitest
+```
+
+**Decisiones clave**
+
+- **Métricas pre-agregadas.** `daily_sales_metrics` se actualiza en la misma transacción que cada mutación de pedidos, así que las lecturas analíticas no recorren la tabla de pedidos.
+- **Concurrencia optimista en el Kanban.** `UPDATE … WHERE id = $1 AND version = $2`. Si otro usuario movió la tarjeta, el servidor responde `VERSION_CONFLICT` y la interfaz revierte el cambio con un aviso.
+- **Índice fraccional + `COLLATE "C"`.** Mover una tarjeta actualiza una sola fila, y Postgres ordena las llaves byte a byte.
+- **Stock transaccional.** Se descuenta al crear un pedido o al sacarlo de *Cancelado* y se repone al cancelarlo. Los locks se toman en orden fijo para evitar *deadlocks*.
+- **Dos capas de autenticación.** `proxy.ts` solo revisa que exista la cookie (rápido); la validación real ocurre en el layout y en cada Server Action con `requireSession()`. Un E2E comprueba que una cookie falsificada no da acceso.
+- **Caché con tag.** Los KPIs del dashboard se cachean con el tag `analytics`, y cada mutación lo invalida.
+- **Dinero en centavos** (enteros) en toda la base de datos y la lógica.
+
+---
+
+## Pruebas
+
+```bash
+npm test                 # Vitest: 37 tests unitarios
+npm run test:e2e         # Playwright: 30 tests E2E (ver "Desarrollo local")
+```
+
+**Unitarias (`tests/unit/`)** — los 10 casos mínimos de los lineamientos más extras:
+
+| Lineamiento | Archivo |
+|---|---|
+| Ticket promedio (normal y con 0 pedidos), margen bruto (normal y con ingresos en 0) | `finance.test.ts` |
+| Formateador de moneda MXN (normal; cero, negativos y redondeo) | `currency.test.ts` |
+| Esquemas Zod: `createOrderSchema` válido / cantidad ≤ 0; `bulkUpdateSchema` > 100 IDs o estado inválido | `schemas.test.ts` |
+| Filtrado por estado y rango de fechas | `filters.test.ts` |
+| Extras: índice fraccional, lógica del tablero, fechas de negocio, normalización de filtros, esquemas de productos y dashboard | `position`, `kanban-board`, `dates`, `list-and-product-schemas`, `dashboard-format` |
+
+**End-to-end (`e2e/`)** — los 3 flujos obligatorios:
+
+| Flujo | Archivo | Qué verifica |
+|---|---|---|
+| 1. Autenticación | `auth.spec.ts` | Las rutas privadas redirigen a `/login` sin sesión; una cookie falsificada no da acceso; la sesión simulada entra; no hay redirecciones abiertas |
+| 2. Creación | `create-order.spec.ts` | Alta de producto y de pedido reflejadas en sus tablas; Bulk Update persistido |
+| 3. Drag & Drop | `kanban-dnd.spec.ts` | Arrastre de OM-E2E-0001 con cambio de columna en el DOM y persistencia vía `kanban-status`; reversión visual si el servidor falla |
+| Extras | `audit-api`, `dashboard`, `console` | Contrato y SLA de los endpoints, dashboard, páginas sin errores de consola |
+
+La sesión E2E se simula: el reset crea una sesión con un token conocido y `auth.setup.ts` construye la cookie firmada, así que nunca se usa Google ni GitHub reales.
+
+---
+
+## CI/CD
+
+`.github/workflows/ci.yml`, en cada push a `main` y en cada pull request:
+
+```
+Lint y typecheck ──► Tests unitarios ──► Tests E2E (Postgres 17) ──► Desplegar a producción
+                                                                     (solo push a main)
+```
+
+El auto-deploy por Git de Vercel está desactivado (`vercel.json` → `"git": { "deploymentEnabled": false }`), así que **la única vía a producción es el último job**, y solo se ejecuta si los tres anteriores pasan. Los E2E corren contra un Postgres efímero con secretos de prueba; nunca tocan producción.
+
+Secretos del repositorio (*Settings → Secrets and variables → Actions*): `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`.
+
+---
+
+## Desarrollo local
+
+**Requisitos:** Node.js ≥ 22.12 y una base PostgreSQL. Puede ser local, con `npx prisma dev`.
+
+```bash
+npm install                      # también genera el cliente de Prisma
+cp .env.example .env             # completa los valores
+npm run db:migrate               # aplica las migraciones
+npm run db:seed                  # carga el dataset de prueba
+npm run dev                      # http://localhost:3000
+```
+
+| Variable | Descripción |
+|---|---|
+| `DATABASE_URL` | Conexión de la app. En Supabase: pooler en modo transacción (puerto 6543, `pgbouncer=true`) |
+| `DIRECT_URL` | Conexión para migraciones. En Supabase: pooler en modo sesión (puerto 5432) |
+| `DB_POOL_MAX` | Conexiones por instancia (5). Con la base local de `prisma dev` usa **1** |
+| `BETTER_AUTH_SECRET` | Secreto de firma de sesiones (32+ caracteres aleatorios) |
+| `BETTER_AUTH_URL` | URL pública de la app (`http://localhost:3000` en local) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Credenciales OAuth de Google |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Credenciales OAuth de GitHub |
+| `ENABLE_TEST_ENDPOINTS` | `true` para habilitar `/api/test/*` |
+| `AUDIT_TOKEN` | Valor del header `x-audit-token` para `reset-data` |
+| `E2E_SESSION_TOKEN` | Solo para pruebas: sesión simulada. **No definir en producción** |
+
+Callbacks de OAuth a registrar: `<BETTER_AUTH_URL>/api/auth/callback/google` y `<BETTER_AUTH_URL>/api/auth/callback/github`.
+
+**E2E en local** contra una base desechable, sin tocar la de tu `.env` (PowerShell):
+
+```powershell
+npx prisma dev --name omnimarket-e2e --detach   # imprime la URL postgres://… local
+$env:DATABASE_URL="postgres://postgres:postgres@localhost:51214/template1?sslmode=disable"; $env:DIRECT_URL=$env:DATABASE_URL
+$env:DB_POOL_MAX="1"; $env:ENABLE_TEST_ENDPOINTS="true"; $env:E2E_BASE_URL="http://localhost:3200"; $env:BETTER_AUTH_URL="http://localhost:3200"
+npx prisma migrate deploy
+npm run test:e2e:install   # solo la primera vez: descarga Chromium
+npm run test:e2e
+```
+
+---
+
+## Despliegue en Vercel
+
+1. **Base de datos:** aplica las migraciones y carga el seed en la base de producción (`npm run db:migrate` y `npm run db:seed` con las URLs de producción, o el `reset-data` una vez desplegado).
+2. **Variables de entorno** del proyecto (*Settings → Environment Variables → Production*): todas las de la tabla anterior excepto `E2E_SESSION_TOKEN`. `BETTER_AUTH_URL` debe ser la URL pública (`https://…`) y `ENABLE_TEST_ENDPOINTS=true`.
+3. **OAuth:** registra los callbacks de producción en Google Cloud Console y en una OAuth App de GitHub (GitHub admite una sola callback URL por app; usa apps distintas para local y producción).
+4. **Secretos de GitHub:** `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. Los dos últimos salen de `.vercel/project.json` tras `npx vercel link`.
+5. **Push a `main`.** El pipeline prueba y despliega.
+6. **Verifica el despliegue:**
+   ```bash
+   npm run smoke -- https://<https://omni-market-operations-hub-biv.vercel.app/>
+   ```
+   Comprueba en solo lectura HTTPS, protección de rutas, Better Auth, los callbacks de ambos OAuth, los endpoints de auditoría con su SLA, el seed y que `reset-data` exija token. Si algo falla, indica qué variable revisar.

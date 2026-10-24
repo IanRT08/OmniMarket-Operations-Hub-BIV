@@ -148,8 +148,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # La URL del despliegue aparece como "View deployment" en GitHub.
     environment:
       name: production
+      url: ${{ steps.deploy.outputs.url }}
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -175,7 +177,9 @@ jobs:
       - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
       - run: vercel build --prod --token="$VERCEL_TOKEN"
       - name: Deploy
+        id: deploy
         run: |
           url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Desplegado en: $url"
           echo "### Desplegado en producción: $url" >> "$GITHUB_STEP_SUMMARY"
