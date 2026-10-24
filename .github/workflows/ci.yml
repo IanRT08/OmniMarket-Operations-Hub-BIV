@@ -41,7 +41,7 @@ defaults:
 jobs:
   quality:
     name: Lint y typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -57,7 +57,7 @@ jobs:
   unit:
     name: Tests unitarios (Vitest)
     needs: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -72,7 +72,7 @@ jobs:
   e2e:
     name: Tests E2E (Playwright)
     needs: unit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     services:
@@ -157,7 +157,7 @@ jobs:
     name: Desplegar a producción (Vercel)
     needs: e2e
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # La URL del despliegue aparece como "View deployment" en GitHub.
     environment:
