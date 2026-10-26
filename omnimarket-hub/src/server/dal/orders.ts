@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { OrderStatus } from "@/generated/prisma/enums";
 import type { MoveOrderData } from "@/features/kanban/schemas";
-import type { BulkUpdateData, CreateOrderData, OrderListQuery } from "@/features/orders/schemas";
+import type { BulkUpdateData, CreateOrderData, OrderListQuery, UpdateOrderData } from "@/features/orders/schemas";
 import { addDays, businessDayStart, toBusinessDay } from "@/lib/dates";
 import { positionAfter, positionsAfter } from "@/lib/position";
 import { applyOrdersToDailyMetrics, countOrdersByStatus } from "@/server/dal/analytics";
@@ -128,6 +128,35 @@ export async function listOrders({ page, pageSize, status, from, to, q }: OrderL
 
 export type OrderList = Awaited<ReturnType<typeof listOrders>>;
 export type OrderListItem = OrderList["rows"][number];
+
+/** Pedido con sus partidas para la página de edición. null si no existe. */
+export async function getOrderDetail(id: string) {
+  return db.order.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      orderNumber: true,
+      customerName: true,
+      customerEmail: true,
+      status: true,
+      version: true,
+      totalCents: true,
+      costCents: true,
+      createdAt: true,
+      items: {
+        orderBy: { product: { name: "asc" } },
+        select: {
+          id: true,
+          quantity: true,
+          unitPriceCents: true,
+          product: { select: { sku: true, name: true } },
+        },
+      },
+    },
+  });
+}
+
+export type OrderDetail = NonNullable<Awaited<ReturnType<typeof getOrderDetail>>>;
 
 export const KANBAN_COLUMN_LIMIT = 100;
 
@@ -342,12 +371,7 @@ async function transitionOrder(tx: Prisma.TransactionClient, transition: Transit
     select: orderSummarySelect,
   });
 
-  if (!order) {
-    throw new DomainError("VERSION_CONFLICT", "Otro usuario modificó este pedido; recarga el tablero", {
-      currentStatus: current.status,
-      currentVersion: current.version,
-    });
-  }
+  if (!order) throw versionConflict(current);
 
   // Cada movimiento queda en la bitácora, también un reordenamiento dentro
   // de la misma columna (fromStatus = toStatus).
@@ -381,6 +405,70 @@ export async function cancelOrder(
       }),
     TX_OPTIONS,
   );
+}
+
+const versionConflict = (current: { status: OrderStatus; version: number }) =>
+  new DomainError("VERSION_CONFLICT", "Otro usuario modificó este pedido; recarga para ver los cambios", {
+    currentStatus: current.status,
+    currentVersion: current.version,
+  });
+
+/**
+ * Edita los datos del cliente y, si cambia, el estado. Un cambio de estado
+ * sigue el mismo camino que el Kanban (bitácora, stock y métricas) y deja
+ * el pedido al final de la columna destino. Ambas partes validan `version`.
+ */
+export async function updateOrder(
+  { orderId, version, status, ...customer }: UpdateOrderData,
+  actorId: string,
+): Promise<OrderSummary> {
+  return db.$transaction(async (tx) => {
+    const current = await tx.order.findUnique({ where: { id: orderId }, select: { status: true, version: true } });
+    if (!current) throw new DomainError("ORDER_NOT_FOUND", "El pedido no existe", { orderId });
+
+    if (current.status !== status) {
+      // transitionOrder valida la versión y deja la fila bloqueada hasta el commit.
+      await transitionOrder(tx, {
+        orderId,
+        expectedVersion: version,
+        toStatus: status,
+        position: await positionAtEndOfColumn(tx, status),
+        actorId,
+      });
+      return tx.order.update({ where: { id: orderId }, data: customer, select: orderSummarySelect });
+    }
+
+    const [order] = await tx.order.updateManyAndReturn({
+      where: { id: orderId, version },
+      data: { ...customer, version: { increment: 1 } },
+      select: orderSummarySelect,
+    });
+    if (!order) throw versionConflict(current);
+    return order;
+  }, TX_OPTIONS);
+}
+
+/**
+ * Elimina un pedido junto con sus partidas y su bitácora (ON DELETE CASCADE).
+ * Si aún contaba como venta (no CANCELLED), antes repone su stock y lo resta
+ * de las métricas, mientras las partidas todavía existen.
+ */
+export async function deleteOrder({ orderId, version }: { orderId: string; version: number }) {
+  return db.$transaction(async (tx) => {
+    // El pedido se bloquea primero: mismo orden orders → products → métricas.
+    const [current] = await tx.$queryRaw<{ orderNumber: string; status: OrderStatus; version: number }[]>`
+      SELECT "order_number" AS "orderNumber", "status", "version"
+      FROM "orders"
+      WHERE "id" = ${orderId}::uuid
+      FOR UPDATE
+    `;
+    if (!current) throw new DomainError("ORDER_NOT_FOUND", "El pedido no existe", { orderId });
+    if (current.version !== version) throw versionConflict(current);
+
+    if (current.status !== OrderStatus.CANCELLED) await deactivateOrders(tx, [orderId]);
+    await tx.order.delete({ where: { id: orderId } });
+    return { id: orderId, orderNumber: current.orderNumber };
+  }, TX_OPTIONS);
 }
 
 /** Drag & Drop: mueve un pedido a `toStatus` en la posición calculada por el cliente. Actualiza 1 fila de orders. */

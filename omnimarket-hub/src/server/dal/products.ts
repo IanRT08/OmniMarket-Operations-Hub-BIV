@@ -151,8 +151,17 @@ export async function getProductOptions() {
 
 export type ProductOption = Awaited<ReturnType<typeof getProductOptions>>[number];
 
+/** Producto para el formulario de edición. null si no existe. */
+export async function getProduct(id: string): Promise<ProductRow | null> {
+  return db.product.findUnique({ where: { id }, select: productSelect });
+}
+
+function isPrismaError(error: unknown, code: string): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
+}
+
 function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+  return isPrismaError(error, "P2002");
 }
 
 export async function createProduct(input: CreateProductData): Promise<ProductRow> {
@@ -195,4 +204,38 @@ export async function updateProduct({ id, stockAdjustment, ...changes }: UpdateP
     `Stock insuficiente: ${current.sku} tiene ${current.stock}, no se pueden retirar ${decrement}`,
     { shortfalls: [{ productId: id, sku: current.sku, stock: current.stock, requested: decrement }] },
   );
+}
+
+/**
+ * Elimina un producto que nunca se ha vendido. Si aparece en pedidos, se
+ * rechaza con PRODUCT_IN_USE: borrarlo rompería el historial de ventas
+ * (order_items → products es RESTRICT). La UI ofrece desactivarlo, que lo
+ * oculta de nuevos pedidos y conserva sus métricas.
+ */
+export async function deleteProduct(id: string): Promise<{ id: string; sku: string }> {
+  const notFound = () => new DomainError("PRODUCT_NOT_FOUND", "El producto no existe", { id });
+
+  const product = await db.product.findUnique({
+    where: { id },
+    select: { sku: true, _count: { select: { items: true } } },
+  });
+  if (!product) throw notFound();
+
+  // Una partida por pedido (@@unique orderId+productId): partidas = pedidos.
+  const inUse = (orders?: number) =>
+    new DomainError(
+      "PRODUCT_IN_USE",
+      `${product.sku} tiene ventas${orders ? ` en ${orders} ${orders === 1 ? "pedido" : "pedidos"}` : ""}: desactívalo para ocultarlo sin perder su historial`,
+      { id, sku: product.sku, orders },
+    );
+  if (product._count.items > 0) throw inUse(product._count.items);
+
+  try {
+    return await db.product.delete({ where: { id }, select: { id: true, sku: true } });
+  } catch (error) {
+    // Carreras: se vendió entre la verificación y el DELETE (FK) o ya se borró.
+    if (isPrismaError(error, "P2003")) throw inUse();
+    if (isPrismaError(error, "P2025")) throw notFound();
+    throw error;
+  }
 }

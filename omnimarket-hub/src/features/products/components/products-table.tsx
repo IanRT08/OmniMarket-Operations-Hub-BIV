@@ -5,6 +5,7 @@ import { grossMarginRatio } from "@/lib/finance";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ProductRow } from "@/server/dal/products";
+import { ProductRowActions } from "./product-row-actions.client";
 
 const LOW_STOCK = 10;
 
@@ -22,7 +23,7 @@ function StockBadge({ stock }: { stock: number }) {
   );
 }
 
-/** Catálogo (Server Component: sin interactividad, no necesita JS en el cliente). */
+/** Catálogo (Server Component); solo las acciones de cada fila son de cliente. */
 export function ProductsTable({ products }: { products: ProductRow[] }) {
   return (
     <TableContainer>
@@ -36,12 +37,15 @@ export function ProductsTable({ products }: { products: ProductRow[] }) {
             <TableHeaderCell className="text-right">Margen</TableHeaderCell>
             <TableHeaderCell className="text-right">Stock</TableHeaderCell>
             <TableHeaderCell>Estado</TableHeaderCell>
+            <TableHeaderCell className="text-right">
+              <span className="sr-only">Acciones</span>
+            </TableHeaderCell>
           </tr>
         </TableHead>
         <tbody>
           {products.length === 0 ? (
             <tr>
-              <td colSpan={7} className="px-4 py-12 text-center text-sm text-ink-muted">
+              <td colSpan={8} className="px-4 py-12 text-center text-sm text-ink-muted">
                 No hay productos que coincidan con la búsqueda.
               </td>
             </tr>
@@ -70,6 +74,9 @@ export function ProductsTable({ products }: { products: ProductRow[] }) {
                       {product.isActive ? "Activo" : "Inactivo"}
                     </span>
                   </TableCell>
+                  <TableCell className="py-1">
+                    <ProductRowActions product={product} />
+                  </TableCell>
                 </TableRow>
               );
             })
@@ -94,6 +101,7 @@ export function ProductsTableSkeletonRows({ rows = 8 }: { rows?: number }) {
           <Skeleton className="h-4 w-14" />
           <Skeleton className="h-5 w-12 rounded-full" />
           <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-8 w-16" />
         </div>
       ))}
       <span className="sr-only">Cargando productos…</span>

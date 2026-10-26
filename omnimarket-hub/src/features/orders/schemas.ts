@@ -17,13 +17,17 @@ export const orderItemSchema = z.object({
     .max(999, "Máximo 999 piezas por producto"),
 });
 
+const customerNameSchema = z
+  .string()
+  .trim()
+  .min(2, "Escribe el nombre del cliente")
+  .max(120, "Máximo 120 caracteres");
+
+const customerEmailSchema = z.email("Escribe un email válido").max(254);
+
 export const createOrderSchema = z.object({
-  customerName: z
-    .string()
-    .trim()
-    .min(2, "Escribe el nombre del cliente")
-    .max(120, "Máximo 120 caracteres"),
-  customerEmail: z.email("Escribe un email válido").max(254),
+  customerName: customerNameSchema,
+  customerEmail: customerEmailSchema,
   items: z
     .array(orderItemSchema)
     .min(1, "Agrega al menos un producto")
@@ -38,6 +42,22 @@ export const cancelOrderSchema = z.object({
   /** Versión que el cliente vio; si cambió, la cancelación se rechaza por conflicto. */
   version: z.number().int().min(1),
 });
+
+/** Eliminar exige la misma versión que cancelar: no se borra un pedido que otro acaba de cambiar. */
+export const deleteOrderSchema = cancelOrderSchema;
+
+/**
+ * Edición de un pedido: datos del cliente y estado. Las partidas no se
+ * editan: guardan el snapshot de precio/costo de la venta; para cambiarlas
+ * se cancela el pedido y se crea otro.
+ */
+export const orderEditFormSchema = z.object({
+  customerName: customerNameSchema,
+  customerEmail: customerEmailSchema,
+  status: z.enum(OrderStatus, "Elige un estado"),
+});
+
+export const updateOrderSchema = orderEditFormSchema.extend(cancelOrderSchema.shape);
 
 export const bulkUpdateSchema = z.object({
   orderIds: z.array(z.uuid()).min(1).max(BULK_UPDATE_MAX_IDS),
@@ -114,5 +134,9 @@ export function orderListQueryToSearchParams(query: OrderListQuery): URLSearchPa
 export type CreateOrderInput = z.input<typeof createOrderSchema>;
 export type CreateOrderData = z.output<typeof createOrderSchema>;
 export type CancelOrderInput = z.input<typeof cancelOrderSchema>;
+export type DeleteOrderInput = z.input<typeof deleteOrderSchema>;
+export type OrderEditFormInput = z.input<typeof orderEditFormSchema>;
+export type UpdateOrderInput = z.input<typeof updateOrderSchema>;
+export type UpdateOrderData = z.output<typeof updateOrderSchema>;
 export type BulkUpdateInput = z.input<typeof bulkUpdateSchema>;
 export type BulkUpdateData = z.output<typeof bulkUpdateSchema>;

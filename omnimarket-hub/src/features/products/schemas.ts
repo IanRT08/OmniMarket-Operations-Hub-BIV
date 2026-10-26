@@ -82,6 +82,35 @@ export const updateProductSchema = z
     { message: "No hay cambios que guardar" },
   );
 
+/**
+ * Formulario de edición: precios en pesos y el stock como ajuste (+/−, 0 si
+ * no cambia). Se transforma a los campos de updateProductSchema (sin `id`,
+ * que lo agrega el formulario).
+ */
+export const productEditFormSchema = z
+  .object({
+    name: productNameSchema,
+    price: pesosSchema("precio"),
+    cost: pesosSchema("costo"),
+    stockAdjustment: z
+      .number("Escribe el ajuste de stock (0 si no cambia)")
+      .int("El ajuste debe ser un número entero")
+      .min(-MAX_STOCK, "Máximo 1,000,000 piezas")
+      .max(MAX_STOCK, "Máximo 1,000,000 piezas"),
+    isActive: z.boolean(),
+  })
+  .transform(({ price, cost, stockAdjustment, ...product }) => ({
+    ...product,
+    priceCents: pesosToCents(price),
+    costCents: pesosToCents(cost),
+    stockAdjustment: stockAdjustment === 0 ? undefined : stockAdjustment,
+  }));
+
+export type ProductEditFormInput = z.input<typeof productEditFormSchema>;
+export type ProductEditFormData = z.output<typeof productEditFormSchema>;
+
+export const deleteProductSchema = z.object({ id: z.uuid() });
+
 export const productListQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   includeInactive: z
@@ -93,4 +122,5 @@ export type CreateProductInput = z.input<typeof createProductSchema>;
 export type CreateProductData = z.output<typeof createProductSchema>;
 export type UpdateProductInput = z.input<typeof updateProductSchema>;
 export type UpdateProductData = z.output<typeof updateProductSchema>;
+export type DeleteProductInput = z.input<typeof deleteProductSchema>;
 export type ProductListQuery = z.output<typeof productListQuerySchema>;

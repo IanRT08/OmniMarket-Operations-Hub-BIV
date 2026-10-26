@@ -7,6 +7,8 @@ const VARIANTS = {
   secondary: "bg-brand-sage text-ink hover:bg-brand-mint",
   outline: "border border-brand-olive bg-white text-ink hover:bg-brand-mint/40",
   ghost: "text-ink-muted hover:bg-brand-mint/40 hover:text-ink",
+  // acciones destructivas: blanco sobre rose-700 6.4:1
+  danger: "bg-rose-700 text-white hover:bg-rose-800",
 } as const;
 
 const SIZES = {

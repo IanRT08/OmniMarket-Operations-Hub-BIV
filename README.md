@@ -54,7 +54,12 @@ En la pestaña **Actions** del repositorio, la última corrida de `CI` sobre `ma
 ### Otras funciones a revisar
 
 - **Bulk Update** — *Pedidos*: selecciona varias filas, elige un estado y pulsa **Aplicar**. Cambio optimista, toast con el resumen y reversión si el servidor falla.
-- **Creación** — *Pedidos → Nuevo pedido* y *Productos → Nuevo producto*. El registro aparece en su tabla al guardar.
+- **CRUD completo de pedidos y productos**:
+  - **Crear**: *Pedidos → Nuevo pedido* y *Productos → Nuevo producto*. El registro aparece en su tabla al guardar.
+  - **Editar** (✏️ en cada fila): datos del cliente y estado del pedido; nombre, precio, costo, ajuste de stock y disponibilidad del producto. El SKU y las partidas de un pedido no se editan: conservan el precio de la venta.
+  - **Eliminar** (🗑️ en cada fila, con confirmación):
+    - Un pedido desaparece de la tabla al instante (optimista) y, si contaba como venta, devuelve su stock y se resta de las métricas.
+    - Un producto solo se puede borrar si nunca se ha vendido. Si tiene ventas, el aviso ofrece **Desactivarlo** para conservar su historial.
 - **Dashboard** — KPIs del periodo (7 / 30 / 90 días), ingresos por día y pedidos por estado; se refresca cada 30 s.
 
 ---
@@ -129,8 +134,8 @@ Restablece el dataset de prueba conocido y responde con los conteos:
 |---|---|
 | **1. Arquitectura & Next.js** | App Router, TypeScript estricto y Tailwind CSS 4. Server Components por defecto, Client Components solo con interactividad. Un test E2E recorre todas las páginas y falla ante cualquier error de consola. |
 | **2. Endpoints de auditoría** | Los tres endpoints de arriba, con `Server-Timing` y SLA verificado en E2E. |
-| **3. Drag & Drop y CRUD** | Kanban con dnd-kit (puntero y teclado), mutación optimista con reversión y control de concurrencia por versión. Bulk Update de hasta 100 pedidos. Alta de pedidos y productos. Toasts y skeletons en toda carga. |
-| **4. Pruebas & CI/CD** | 37 tests unitarios (Vitest) y 30 E2E (Playwright) que cubren los 3 flujos obligatorios. El pipeline bloquea el despliegue si algo falla. |
+| **3. Drag & Drop y CRUD** | Kanban con dnd-kit (puntero y teclado), mutación optimista con reversión y control de concurrencia por versión. Bulk Update de hasta 100 pedidos. CRUD completo (crear, listar, editar, eliminar) de pedidos y productos. Toasts y skeletons en toda carga. |
+| **4. Pruebas & CI/CD** | 42 tests unitarios (Vitest) y 37 E2E (Playwright) que cubren los 3 flujos obligatorios. El pipeline bloquea el despliegue si algo falla. |
 | **5. Despliegue** | Vercel (`iad1`) + PostgreSQL en Supabase (us-east-1), SSL de Vercel. |
 
 ---
@@ -155,7 +160,7 @@ omnimarket-hub/                     # la aplicación Next.js
 │   ├── app/
 │   │   ├── (auth)/login/           # inicio de sesión (Google / GitHub)
 │   │   ├── (dashboard)/            # layout con requireSession() + navegación
-│   │   │   └── dashboard/  orders/  orders/new/  kanban/  products/  products/new/
+│   │   │   └── dashboard/  kanban/  orders/{new, [id]/edit}/  products/{new, [id]/edit}/
 │   │   └── api/
 │   │       ├── auth/[...all]/      # Better Auth
 │   │       └── test/               # endpoints de auditoría
@@ -177,7 +182,8 @@ omnimarket-hub/                     # la aplicación Next.js
 - **Métricas pre-agregadas.** `daily_sales_metrics` se actualiza en la misma transacción que cada mutación de pedidos, así que las lecturas analíticas no recorren la tabla de pedidos.
 - **Concurrencia optimista en el Kanban.** `UPDATE … WHERE id = $1 AND version = $2`. Si otro usuario movió la tarjeta, el servidor responde `VERSION_CONFLICT` y la interfaz revierte el cambio con un aviso.
 - **Índice fraccional + `COLLATE "C"`.** Mover una tarjeta actualiza una sola fila, y Postgres ordena las llaves byte a byte.
-- **Stock transaccional.** Se descuenta al crear un pedido o al sacarlo de *Cancelado* y se repone al cancelarlo. Los locks se toman en orden fijo para evitar *deadlocks*.
+- **Stock transaccional.** Se descuenta al crear un pedido o al sacarlo de *Cancelado* y se repone al cancelarlo o eliminarlo. Los locks se toman en orden fijo para evitar *deadlocks*.
+- **Eliminar sin perder historial.** `order_items → products` es `RESTRICT`: un producto vendido no se borra, se desactiva. Editar o eliminar un pedido exige la `version` leída, igual que el Kanban.
 - **Dos capas de autenticación.** `proxy.ts` solo revisa que exista la cookie (rápido); la validación real ocurre en el layout y en cada Server Action con `requireSession()`. Un E2E comprueba que una cookie falsificada no da acceso.
 - **Caché con tag.** Los KPIs del dashboard se cachean con el tag `analytics`, y cada mutación lo invalida.
 - **Dinero en centavos** (enteros) en toda la base de datos y la lógica.
@@ -187,8 +193,8 @@ omnimarket-hub/                     # la aplicación Next.js
 ## Pruebas
 
 ```bash
-npm test                 # Vitest: 37 tests unitarios
-npm run test:e2e         # Playwright: 30 tests E2E (ver "Desarrollo local")
+npm test                 # Vitest: 42 tests unitarios
+npm run test:e2e         # Playwright: 37 tests E2E (ver "Desarrollo local")
 ```
 
 **Unitarias (`tests/unit/`)** — los 10 casos mínimos de los lineamientos más extras:
@@ -199,7 +205,7 @@ npm run test:e2e         # Playwright: 30 tests E2E (ver "Desarrollo local")
 | Formateador de moneda MXN (normal; cero, negativos y redondeo) | `currency.test.ts` |
 | Esquemas Zod: `createOrderSchema` válido / cantidad ≤ 0; `bulkUpdateSchema` > 100 IDs o estado inválido | `schemas.test.ts` |
 | Filtrado por estado y rango de fechas | `filters.test.ts` |
-| Extras: índice fraccional, lógica del tablero, fechas de negocio, normalización de filtros, esquemas de productos y dashboard | `position`, `kanban-board`, `dates`, `list-and-product-schemas`, `dashboard-format` |
+| Extras: índice fraccional, lógica del tablero, fechas de negocio, normalización de filtros, esquemas de productos, edición/eliminación y dashboard | `position`, `kanban-board`, `dates`, `list-and-product-schemas`, `crud-schemas`, `dashboard-format` |
 
 **End-to-end (`e2e/`)** — los 3 flujos obligatorios:
 
@@ -208,6 +214,7 @@ npm run test:e2e         # Playwright: 30 tests E2E (ver "Desarrollo local")
 | 1. Autenticación | `auth.spec.ts` | Las rutas privadas redirigen a `/login` sin sesión; una cookie falsificada no da acceso; la sesión simulada entra; no hay redirecciones abiertas |
 | 2. Creación | `create-order.spec.ts` | Alta de producto y de pedido reflejadas en sus tablas; Bulk Update persistido |
 | 3. Drag & Drop | `kanban-dnd.spec.ts` | Arrastre de OM-E2E-0001 con cambio de columna en el DOM y persistencia vía `kanban-status`; reversión visual si el servidor falla |
+| CRUD | `crud.spec.ts` | Editar producto y pedido (con cambio de estado persistido), eliminar producto sin ventas, rechazo de producto con ventas, eliminar pedido (404 en `kanban-status`) |
 | Extras | `audit-api`, `dashboard`, `console` | Contrato y SLA de los endpoints, dashboard, páginas sin errores de consola |
 
 La sesión E2E se simula: el reset crea una sesión con un token conocido y `auth.setup.ts` construye la cookie firmada, así que nunca se usa Google ni GitHub reales.

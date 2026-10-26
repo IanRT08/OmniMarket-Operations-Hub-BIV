@@ -1,8 +1,8 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableRow } from "@/components/ui/table";
 
-// Anchos por columna (selección, pedido, cliente, estado, artículos, total, fecha).
-const CELL_WIDTHS = ["w-4", "w-28", "w-40", "w-20", "w-8", "w-20", "w-32"];
+// Anchos por columna (selección, pedido, cliente, estado, artículos, total, fecha, acciones).
+const CELL_WIDTHS = ["w-4", "w-28", "w-40", "w-20", "w-8", "w-20", "w-32", "w-16"];
 
 /** Filas de carga con la misma estructura que las reales (mismo alto de fila). */
 export function OrderRowsSkeleton({ rows }: { rows: number }) {

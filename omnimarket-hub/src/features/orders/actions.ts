@@ -5,11 +5,15 @@ import {
   bulkUpdateSchema,
   cancelOrderSchema,
   createOrderSchema,
+  deleteOrderSchema,
   orderListQuerySchema,
+  updateOrderSchema,
   type BulkUpdateInput,
   type CancelOrderInput,
   type CreateOrderInput,
+  type DeleteOrderInput,
   type OrderListQuery,
+  type UpdateOrderInput,
 } from "@/features/orders/schemas";
 import type { ActionResult } from "@/lib/action-result";
 import { invalidInput, runAction } from "@/server/action-utils";
@@ -57,6 +61,36 @@ export async function cancelOrder(input: CancelOrderInput): Promise<ActionResult
 
   return runAction(async () => {
     const order = await ordersDal.cancelOrder(parsed.data, session.user.id);
+    revalidateTag(ANALYTICS_CACHE_TAG, { expire: 0 });
+    return order;
+  });
+}
+
+/** Edita cliente y estado de un pedido (página /orders/[id]/edit). */
+export async function updateOrder(input: UpdateOrderInput): Promise<ActionResult<ordersDal.OrderSummary>> {
+  const session = await requireSession();
+
+  const parsed = updateOrderSchema.safeParse(input);
+  if (!parsed.success) return invalidInput(parsed.error);
+
+  return runAction(async () => {
+    const order = await ordersDal.updateOrder(parsed.data, session.user.id);
+    revalidateTag(ANALYTICS_CACHE_TAG, { expire: 0 });
+    return order;
+  });
+}
+
+/** Elimina un pedido; si contaba como venta, repone stock y resta métricas. */
+export async function deleteOrder(
+  input: DeleteOrderInput,
+): Promise<ActionResult<{ id: string; orderNumber: string }>> {
+  await requireSession();
+
+  const parsed = deleteOrderSchema.safeParse(input);
+  if (!parsed.success) return invalidInput(parsed.error);
+
+  return runAction(async () => {
+    const order = await ordersDal.deleteOrder(parsed.data);
     revalidateTag(ANALYTICS_CACHE_TAG, { expire: 0 });
     return order;
   });

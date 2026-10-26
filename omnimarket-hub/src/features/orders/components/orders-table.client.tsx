@@ -35,6 +35,7 @@ import { mutationKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import type { OrderListItem } from "@/server/dal/orders";
 import { BulkActionsBar } from "./bulk-actions-bar.client";
+import { OrderRowActions } from "./order-row-actions.client";
 import { OrdersFilters } from "./orders-filters.client";
 import { OrderRowsSkeleton, OrdersTableSkeleton } from "./orders-table-skeleton";
 
@@ -93,6 +94,11 @@ const columns = column.columns([
   column.accessor("createdAt", {
     header: "Fecha",
     cell: (info) => <span className="whitespace-nowrap text-ink-muted">{formatDateTime(info.getValue())}</span>,
+  }),
+  column.display({
+    id: "actions",
+    header: () => <span className="sr-only">Acciones</span>,
+    cell: ({ row }) => <OrderRowActions order={row.original} />,
   }),
 ]);
 

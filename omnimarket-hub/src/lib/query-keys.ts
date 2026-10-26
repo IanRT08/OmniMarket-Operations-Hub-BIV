@@ -25,5 +25,9 @@ export const mutationKeys = {
   moveOrder: ["kanban", "move-order"] as const,
   bulkUpdate: ["orders", "bulk-update"] as const,
   createOrder: ["orders", "create"] as const,
+  updateOrder: ["orders", "update"] as const,
+  deleteOrder: ["orders", "delete"] as const,
   createProduct: ["products", "create"] as const,
+  updateProduct: ["products", "update"] as const,
+  deleteProduct: ["products", "delete"] as const,
 } as const;

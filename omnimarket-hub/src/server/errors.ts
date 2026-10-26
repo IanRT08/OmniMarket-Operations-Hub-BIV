@@ -6,6 +6,7 @@ export type DomainErrorCode =
   | "ALREADY_IN_STATUS"
   | "PRODUCT_UNAVAILABLE"
   | "PRODUCT_NOT_FOUND"
+  | "PRODUCT_IN_USE"
   | "SKU_TAKEN"
   | "INSUFFICIENT_STOCK";
 
